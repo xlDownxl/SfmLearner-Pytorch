@@ -200,7 +200,7 @@ def main():
     #logger.epoch_bar.start()
 
     if args.pretrained_disp or args.evaluate:
-        logger.reset_valid_bar()
+        #logger.reset_valid_bar()
         if args.with_gt and args.with_pose:
             errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, 0, logger, tb_writer)
         elif args.with_gt:
@@ -283,10 +283,11 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         intrinsics = intrinsics.to(device)
 
         # compute output
-        depth_input = torch.cat((tgt_img,ref_imgs[0],ref_imgs[1]),1)
+        #depth_input = torch.cat((tgt_img,ref_imgs[0],ref_imgs[1]),1)
         #print(depth_input.shape)
-        pose_shape = [depth_input.shape[0],6]
-        disparities = disp_net(depth_input,torch.from_numpy(np.zeros(pose_shape).astype(np.float32)).to(device))
+        #pose_shape = [depth_input.shape[0],6]
+        #disparities = disp_net(depth_input,torch.from_numpy(np.zeros(pose_shape).astype(np.float32)).to(device))
+        disparities = disp_net(tgt_img)
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
@@ -404,8 +405,8 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         batch_time.update(time.time() - end)
         end = time.time()
         #logger.valid_bar.update(i+1)
-        if i % args.print_freq == 0:
-            logger.valid_writer.write('valid: Time {} Loss {}'.format(batch_time, losses))
+        #if i % args.print_freq == 0:
+        #    logger.valid_writer.write('valid: Time {} Loss {}'.format(batch_time, losses))
     if log_outputs:
         prefix = 'valid poses'
         coeffs_names = ['tx', 'ty', 'tz']
