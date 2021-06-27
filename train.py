@@ -196,8 +196,8 @@ def main():
         writer = csv.writer(csvfile, delimiter='\t')
         writer.writerow(['train_loss', 'photo_loss', 'explainability_loss', 'smooth_loss'])
 
-    logger = TermLogger(n_epochs=args.epochs, train_size=min(len(train_loader), args.epoch_size), valid_size=len(val_loader))
-    logger.epoch_bar.start()
+    logger = None#TermLogger(n_epochs=args.epochs, train_size=min(len(train_loader), args.epoch_size), valid_size=len(val_loader))
+    #logger.epoch_bar.start()
 
     if args.pretrained_disp or args.evaluate:
         logger.reset_valid_bar()
@@ -210,18 +210,18 @@ def main():
         for error, name in zip(errors, error_names):
             tb_writer.add_scalar(name, error, 0)
         error_string = ', '.join('{} : {:.3f}'.format(name, error) for name, error in zip(error_names[2:9], errors[2:9]))
-        logger.valid_writer.write(' * Avg {}'.format(error_string))
+        #logger.valid_writer.write(' * Avg {}'.format(error_string))
 
     for epoch in range(args.epochs):
-        logger.epoch_bar.update(epoch)
+        #logger.epoch_bar.update(epoch)
 
         # train for one epoch
-        logger.reset_train_bar()
+        #logger.reset_train_bar()
         train_loss = train(args, train_loader, disp_net, pose_exp_net, optimizer, args.epoch_size, logger, tb_writer)
-        logger.train_writer.write(' * Avg Loss : {:.3f}'.format(train_loss))
+        #logger.train_writer.write(' * Avg Loss : {:.3f}'.format(train_loss))
 
         # evaluate on validation set
-        logger.reset_valid_bar()
+        #logger.reset_valid_bar()
         if args.with_gt and args.with_pose:
             errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer)
         elif args.with_gt:
@@ -229,7 +229,7 @@ def main():
         else:
             errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer)
         error_string = ', '.join('{} : {:.3f}'.format(name, error) for name, error in zip(error_names, errors))
-        logger.valid_writer.write(' * Avg {}'.format(error_string))
+        #logger.valid_writer.write(' * Avg {}'.format(error_string))
 
         for error, name in zip(errors, error_names):
             tb_writer.add_scalar(name, error, epoch)
@@ -255,7 +255,7 @@ def main():
         with open(args.save_path/args.log_summary, 'a') as csvfile:
             writer = csv.writer(csvfile, delimiter='\t')
             writer.writerow([train_loss, decisive_error])
-    logger.epoch_bar.finish()
+    #logger.epoch_bar.finish()
 
 
 def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, logger, tb_writer):
@@ -270,7 +270,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
     pose_exp_net.train()
 
     end = time.time()
-    logger.train_bar.update(0)
+    #logger.train_bar.update(0)
 
     for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv) in enumerate(train_loader):
         log_losses = i > 0 and n_iter % args.print_freq == 0
@@ -328,9 +328,9 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         with open(args.save_path/args.log_full, 'a') as csvfile:
             writer = csv.writer(csvfile, delimiter='\t')
             writer.writerow([loss.item(), loss_1.item(), loss_2.item() if w2 > 0 else 0, loss_3.item()])
-        logger.train_bar.update(i+1)
-        if i % args.print_freq == 0:
-            logger.train_writer.write('Train: Time {} Data {} Loss {}'.format(batch_time, data_time, losses))
+        #logger.train_bar.update(i+1)
+        #if i % args.print_freq == 0:
+            #logger.train_writer.write('Train: Time {} Data {} Loss {}'.format(batch_time, data_time, losses))
         if i >= epoch_size - 1:
             break
 
@@ -356,7 +356,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
     pose_exp_net.eval()
 
     end = time.time()
-    logger.valid_bar.update(0)
+    #logger.valid_bar.update(0)
     for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         ref_imgs = [img.to(device) for img in ref_imgs]
@@ -403,7 +403,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        logger.valid_bar.update(i+1)
+        #logger.valid_bar.update(i+1)
         if i % args.print_freq == 0:
             logger.valid_writer.write('valid: Time {} Loss {}'.format(batch_time, losses))
     if log_outputs:
@@ -416,7 +416,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         for i in range(poses.shape[1]):
             tb_writer.add_histogram('{} {}'.format(prefix, coeffs_names[i]), poses[:, i], epoch)
         tb_writer.add_histogram('disp_values', disp_values, epoch)
-    logger.valid_bar.update(len(val_loader))
+    #logger.valid_bar.update(len(val_loader))
     return losses.avg, ['Validation Total loss', 'Validation Photo loss', 'Validation Exp loss']
 
 
@@ -439,7 +439,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
     pose_exp_net.eval()
 
     end = time.time()
-    logger.valid_bar.update(0)
+    #logger.valid_bar.update(0)
     for i, (tgt_img, ref_imgs, gt_depth, gt_poses) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         gt_depth = gt_depth.to(device)
@@ -495,14 +495,14 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        logger.valid_bar.update(i+1)
-        if i % args.print_freq == 0:
-            logger.valid_writer.write(
-                'valid: Time {} Abs Error {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(batch_time,
-                                                                                       depth_errors.val[0],
-                                                                                       depth_errors.avg[0],
-                                                                                       pose_errors.val[0],
-                                                                                       pose_errors.avg[0]))
+        #logger.valid_bar.update(i+1)
+        #if i % args.print_freq == 0:
+            #.valid_writer.write(
+            #    'valid: Time {} Abs Error {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(batch_time,
+             #                                                                          depth_errors.val[0],
+             #                                                                          depth_errors.avg[0],
+             #                                                                          pose_errors.val[0],
+             #                                                                          pose_errors.avg[0]))
     if log_outputs:
         prefix = 'valid poses'
         coeffs_names = ['tx', 'ty', 'tz']
@@ -513,7 +513,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         for i in range(poses_values.shape[1]):
             tb_writer.add_histogram('{} {}'.format(prefix, coeffs_names[i]), poses_values[:, i], epoch)
         tb_writer.add_histogram('disp_values', disp_values, epoch)
-    logger.valid_bar.update(len(val_loader))
+    #logger.valid_bar.update(len(val_loader))
     return depth_errors.avg + pose_errors.avg, depth_error_names + pose_error_names
 
 
@@ -531,7 +531,7 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
     disp_net.eval()
 
     end = time.time()
-    logger.valid_bar.update(0)
+    #logger.valid_bar.update(0)
     for i, (tgt_img, depth) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         depth = depth.to(device)
@@ -565,10 +565,10 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        logger.valid_bar.update(i+1)
-        if i % args.print_freq == 0:
-            logger.valid_writer.write('valid: Time {} Abs Error {:.4f} ({:.4f})'.format(batch_time, errors.val[0], errors.avg[0]))
-    logger.valid_bar.update(len(val_loader))
+        #logger.valid_bar.update(i+1)
+        #if i % args.print_freq == 0:
+            #logger.valid_writer.write('valid: Time {} Abs Error {:.4f} ({:.4f})'.format(batch_time, errors.val[0], errors.avg[0]))
+    #logger.valid_bar.update(len(val_loader))
     return errors.avg, error_names
 
 
