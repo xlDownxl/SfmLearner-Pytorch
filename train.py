@@ -285,7 +285,8 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         # compute output
         depth_input = torch.cat((tgt_img,ref_imgs[0],ref_imgs[1]),1)
         #print(depth_input.shape)
-        disparities = disp_net(depth_input)
+        pose_shape = [depth_input.shape[0],6]
+        disparities = disp_net(depth_input,torch.from_numpy(np.zeros(pose_shape).astype(np.float32)).to(device))
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
