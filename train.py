@@ -154,7 +154,7 @@ def main():
     # create model
     print("=> creating model")
 
-    disp_net = models.DispNetS().to(device)
+    disp_net = models.DispNetS(num_ref_imgs=args.sequence_length).to(device)
     output_exp = args.mask_loss_weight > 0
     if not output_exp:
         print("=> no mask loss, PoseExpnet will only output pose")
@@ -283,7 +283,9 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         intrinsics = intrinsics.to(device)
 
         # compute output
-        disparities = disp_net(tgt_img)
+        depth_input = torch.cat((tgt_img,ref_imgs[0],ref_imgs[1]),1)
+        #print(depth_input.shape)
+        disparities = disp_net(depth_input)
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
