@@ -41,14 +41,14 @@ def crop_like(input, ref):
 
 class DispNetS(nn.Module):
 
-    def __init__(self, num_ref_imgs=3,alpha=10, beta=0.01):
+    def __init__(self, alpha=10, beta=0.01):
         super(DispNetS, self).__init__()
 
         self.alpha = alpha
         self.beta = beta
 
         conv_planes = [32, 64, 128, 256, 512, 512, 512]
-        self.conv1 = downsample_conv(num_ref_imgs*3,              conv_planes[0], kernel_size=7)
+        self.conv1 = downsample_conv(3,              conv_planes[0], kernel_size=7)
         self.conv2 = downsample_conv(conv_planes[0], conv_planes[1], kernel_size=5)
         self.conv3 = downsample_conv(conv_planes[1], conv_planes[2])
         self.conv4 = downsample_conv(conv_planes[2], conv_planes[3])
@@ -78,11 +78,6 @@ class DispNetS(nn.Module):
         self.predict_disp2 = predict_disp(upconv_planes[5])
         self.predict_disp1 = predict_disp(upconv_planes[6])
 
-        self.adaptive_pool = nn.AdaptiveMaxPool2d(2)
-        self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(4*512+6,4*512)
-        self.fc2 = nn.Linear(4*512,4*512)
-
     def init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
@@ -90,36 +85,16 @@ class DispNetS(nn.Module):
                 if m.bias is not None:
                     zeros_(m.bias)
 
-    def forward(self, images, pose):
-        #print(pose.shape)
-        out_conv1 = self.conv1(images)
+    def forward(self, x):
+        out_conv1 = self.conv1(x)
         out_conv2 = self.conv2(out_conv1)
         out_conv3 = self.conv3(out_conv2)
         out_conv4 = self.conv4(out_conv3)
         out_conv5 = self.conv5(out_conv4)
         out_conv6 = self.conv6(out_conv5)
         out_conv7 = self.conv7(out_conv6)
-        #print(out_conv7.shape)
-        #out_pool = self.adaptive_pool(out_conv7)
-        #print(out_pool.shape)
-        flatted = self.flatten(out_conv7)
-        #print(flatted.shape)
-        cat = torch.cat((flatted,pose),dim=1)
-        #print(cat.shape)
-        fc_out1 = self.fc1(cat)
-        #print(fc_out1.shape)
-        fc_out2 = self.fc2(fc_out1)
-        #print(fc_out2.shape)
-        reshaped = fc_out2.view(-1, 512,1,4)
-        #print(reshaped.shape)
-        #print("____")
-        #print(out_conv6.shape)
-        #print(self.upconv7(reshaped).shape)
 
-
-
-        out_upconv7 = crop_like(self.upconv7(reshaped), out_conv6)
-        #print(out_upconv7.shape)
+        out_upconv7 = crop_like(self.upconv7(out_conv7), out_conv6)
         concat7 = torch.cat((out_upconv7, out_conv6), 1)
         out_iconv7 = self.iconv7(concat7)
 
@@ -148,8 +123,8 @@ class DispNetS(nn.Module):
         out_iconv2 = self.iconv2(concat2)
         disp2 = self.alpha * self.predict_disp2(out_iconv2) + self.beta
 
-        out_upconv1 = crop_like(self.upconv1(out_iconv2), images)
-        disp2_up = crop_like(F.interpolate(disp2, scale_factor=2, mode='bilinear', align_corners=False), images)
+        out_upconv1 = crop_like(self.upconv1(out_iconv2), x)
+        disp2_up = crop_like(F.interpolate(disp2, scale_factor=2, mode='bilinear', align_corners=False), x)
         concat1 = torch.cat((out_upconv1, disp2_up), 1)
         out_iconv1 = self.iconv1(concat1)
         disp1 = self.alpha * self.predict_disp1(out_iconv1) + self.beta
