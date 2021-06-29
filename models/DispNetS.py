@@ -80,7 +80,7 @@ class DispNetS(nn.Module):
 
         self.adaptive_pool = nn.AdaptiveMaxPool2d(2)
         self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(4*512+6,4*512)
+        self.fc1 = nn.Linear(4*512+12,4*512)
         self.fc2 = nn.Linear(4*512,4*512)
 
     def init_weights(self):
@@ -90,7 +90,7 @@ class DispNetS(nn.Module):
                 if m.bias is not None:
                     zeros_(m.bias)
 
-    def forward(self, images, pose):
+    def forward(self, images, poses):
         #print(pose.shape)
         out_conv1 = self.conv1(images)
         out_conv2 = self.conv2(out_conv1)
@@ -101,10 +101,10 @@ class DispNetS(nn.Module):
         out_conv7 = self.conv7(out_conv6)
         #print(out_conv7.shape)
         #out_pool = self.adaptive_pool(out_conv7)
-        #print(out_pool.shape)
+        #print(outf_pool.shape)
         flatted = self.flatten(out_conv7)
         #print(flatted.shape)
-        cat = torch.cat((flatted,pose),dim=1)
+        cat = torch.cat((flatted,poses),dim=1)
         #print(cat.shape)
         fc_out1 = self.fc1(cat)
         #print(fc_out1.shape)
