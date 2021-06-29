@@ -154,7 +154,7 @@ def main():
     # create model
     print("=> creating model")
 
-    disp_net = models.DispNetS().to(device)
+    disp_net = models.DispNetS(num_imgs=args.sequence_length).to(device)
     output_exp = args.mask_loss_weight > 0
     if not output_exp:
         print("=> no mask loss, PoseExpnet will only output pose")
@@ -285,12 +285,16 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
         # compute output
-        depth_input = torch.cat((tgt_img,ref_imgs[0],ref_imgs[1]),1)
+        half = args.sequence_length//2
+        #print(half)
+
+        depth_input = torch.cat((*ref_imgs[0:half],tgt_img,*ref_imgs[half:args.sequence_length]),1)
         #print(depth_input.shape)
+        #print("____")
         #pose_shape = [depth_input.shape[0],6]
         #print(pose_shape)
         #print(pose.shape)
-        disparities = disp_net(depth_input,pose.view(-1,12))
+        disparities = disp_net(depth_input,pose.view(-1,(args.sequence_length-1)*6))
         depth = [1/disp for disp in disparities]
 
 
@@ -367,12 +371,14 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         intrinsics = intrinsics.to(device)
         intrinsics_inv = intrinsics_inv.to(device)
 
-        # compute output
-        depth_input = torch.cat((tgt_img,ref_imgs[0],ref_imgs[1]),1)
+        half = args.sequence_length//2
+        #print(half)
+
+        depth_input = torch.cat((*ref_imgs[0:half],tgt_img,*ref_imgs[half:args.sequence_length]),1)
         #print(depth_input.shape)
         #pose_shape = [depth_input.shape[0],6]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
-        disp = disp_net(depth_input,pose.view(-1,12))
+        disp = disp_net(depth_input,pose.view(-1,(args.sequence_length-1)*6))
         depth = 1/disp
 
 
@@ -526,7 +532,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
 
 
 @torch.no_grad()
-def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sample_nb_to_log=3):
+def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sample_nb_to_log=10):
     global device
     batch_time = AverageMeter()
     error_names = ['abs_diff', 'abs_rel', 'sq_rel', 'a1', 'a2', 'a3']
@@ -545,7 +551,14 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
         depth = depth.to(device)
 
         # compute output
-        output_disp = disp_net(tgt_img)
+        half = args.sequence_length//2
+        ref=[]
+        for i in range(half):
+            ref.append(torch.from_numpy(np.zeros(tgt_img.shape).astype(np.float32)).to(device))
+
+        depth_input = torch.cat((*ref,tgt_img,*ref),1)
+        pose_shape = [depth_input.shape[0],(args.sequence_length-1)*6]
+        output_disp = disp_net(depth_input, torch.from_numpy(np.zeros(pose_shape).astype(np.float32)).to(device))
         output_depth = 1/output_disp[:, 0]
 
         if log_outputs and i in batches_to_log:
