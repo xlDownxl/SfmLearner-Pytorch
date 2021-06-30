@@ -78,11 +78,6 @@ class DispNetS(nn.Module):
         self.predict_disp2 = predict_disp(upconv_planes[5])
         self.predict_disp1 = predict_disp(upconv_planes[6])
 
-        self.adaptive_pool = nn.AdaptiveMaxPool2d(2)
-        self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(4*512,4*512)
-        self.fc2 = nn.Linear(4*512,4*512)
-
     def init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
@@ -98,21 +93,6 @@ class DispNetS(nn.Module):
         out_conv5 = self.conv5(out_conv4)
         out_conv6 = self.conv6(out_conv5)
         out_conv7 = self.conv7(out_conv6)
-
-        flatted = self.flatten(out_conv7)
-        #print(flatted.shape)
-        #print(poses.shape)
-        #cat = torch.cat((flatted,poses),dim=1)
-        #print(cat.shape)
-        fc_out1 = self.fc1(flatted)
-        #print(fc_out1.shape)
-        fc_out2 = self.fc2(fc_out1)
-        #print(fc_out2.shape)
-        reshaped = fc_out2.view(-1, 512,1,4)
-        #print(reshaped.shape)
-        #print("____")
-        #print(out_conv6.shape)
-        #print(self.upconv7(reshaped).shape)
 
         out_upconv7 = crop_like(self.upconv7(out_conv7), out_conv6)
         concat7 = torch.cat((out_upconv7, out_conv6), 1)
