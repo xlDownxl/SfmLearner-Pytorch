@@ -26,6 +26,12 @@ def conv(in_planes, out_planes):
         nn.ReLU(inplace=True)
     )
 
+def fc(in_planes, out_planes):
+    return nn.Sequential(
+        nn.Linear(in_planes, out_planes),
+        nn.ReLU(inplace=True)
+    )
+
 
 def upconv(in_planes, out_planes):
     return nn.Sequential(
@@ -80,8 +86,8 @@ class DispNetS(nn.Module):
 
         self.adaptive_pool = nn.AdaptiveMaxPool2d(2)
         self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(4*512,4*512)
-        self.fc2 = nn.Linear(4*512,4*512)
+        self.fc1 = fc(4*512,4*512)
+        self.fc2 = fc(4*512,4*512)
 
     def init_weights(self):
         for m in self.modules():
@@ -114,7 +120,7 @@ class DispNetS(nn.Module):
         #print(out_conv6.shape)
         #print(self.upconv7(reshaped).shape)
 
-        out_upconv7 = crop_like(self.upconv7(out_conv7), out_conv6)
+        out_upconv7 = crop_like(self.upconv7(reshaped), out_conv6)
         concat7 = torch.cat((out_upconv7, out_conv6), 1)
         out_iconv7 = self.iconv7(concat7)
 
