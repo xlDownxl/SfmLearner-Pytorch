@@ -129,6 +129,7 @@ def main():
             from datasets.validation_folders import CustomValidationSet
             val_set = CustomValidationSet(
                 args.data,
+                seed=args.seed,
                 sequence_length=args.sequence_length,
                 transform=valid_transform
             )
