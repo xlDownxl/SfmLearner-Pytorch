@@ -155,7 +155,7 @@ def main():
     # create model
     print("=> creating model")
 
-    disp_net = models.DispNetS().to(device)
+    disp_net = models.DispNetS(nr_input_images=2).to(device)
     output_exp = args.mask_loss_weight > 0
     if not output_exp:
         print("=> no mask loss, PoseExpnet will only output pose")
@@ -286,11 +286,11 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         intrinsics = intrinsics.to(device)
 
         # compute output
-        #half = args.sequence_length//2
-        #depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+        half = args.sequence_length//2
+        depth_input = torch.cat((ref_imgs[half],tgt_img),1)
         #print(depth_input.shape)
         #pose_shape = [depth_input.shape[0],6]
-        disparities = disp_net(tgt_img)
+        disparities = disp_net(depth_input)
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
@@ -368,9 +368,9 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         intrinsics_inv = intrinsics_inv.to(device)
 
         # compute output
-        #half = args.sequence_length//2
-        #depth_input = torch.cat((ref_imgs[half],tgt_img),1)
-        disp = disp_net(output_disp = disp_net(tgt_img))
+        half = args.sequence_length//2
+        depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+        disp = disp_net(depth_input)
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
@@ -541,17 +541,16 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
     for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv, depth) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         depth = depth.to(device)
-        
+
         ref_imgs = [img.to(device) for img in ref_imgs]
         #print(ref_imgs[0].shape)
         #print(depth.shape)
 
         # compute output
-       
-        #half = args.sequence_length//2
-        #depth_input = torch.cat((ref_imgs[half],tgt_img),1)
 
-        output_disp = disp_net(tgt_img)
+        half = args.sequence_length//2
+        depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+        output_disp = disp_net(depth_input)
         output_depth = 1/output_disp[:, 0]
 
         if log_outputs and i in batches_to_log:
