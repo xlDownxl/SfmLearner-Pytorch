@@ -129,6 +129,7 @@ def main():
             from datasets.validation_folders import CustomValidationSet
             val_set = CustomValidationSet(
                 args.data,
+                sequence_length=args.sequence_length,
                 transform=valid_transform
             )
     else:
@@ -281,10 +282,12 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         data_time.update(time.time() - end)
         tgt_img = tgt_img.to(device)
         ref_imgs = [img.to(device) for img in ref_imgs]
+        
         intrinsics = intrinsics.to(device)
 
         # compute output
-        #depth_input = torch.cat((tgt_img,ref_imgs[0],ref_imgs[1]),1)
+        #half = args.sequence_length//2
+        #depth_input = torch.cat((ref_imgs[half],tgt_img),1)
         #print(depth_input.shape)
         #pose_shape = [depth_input.shape[0],6]
         disparities = disp_net(tgt_img)
@@ -365,7 +368,9 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         intrinsics_inv = intrinsics_inv.to(device)
 
         # compute output
-        disp = disp_net(tgt_img)
+        #half = args.sequence_length//2
+        #depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+        disp = disp_net(output_disp = disp_net(tgt_img))
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
@@ -536,10 +541,16 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
     for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv, depth) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         depth = depth.to(device)
-        print(ref_imgs[0].shape)
-        print(depth.shape)
+        
+        ref_imgs = [img.to(device) for img in ref_imgs]
+        #print(ref_imgs[0].shape)
+        #print(depth.shape)
 
         # compute output
+       
+        #half = args.sequence_length//2
+        #depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+
         output_disp = disp_net(tgt_img)
         output_depth = 1/output_disp[:, 0]
 

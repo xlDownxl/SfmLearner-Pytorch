@@ -41,14 +41,14 @@ def crop_like(input, ref):
 
 class DispNetS(nn.Module):
 
-    def __init__(self, alpha=10, beta=0.01):
+    def __init__(self,nr_input_images=2, alpha=10, beta=0.01):
         super(DispNetS, self).__init__()
 
         self.alpha = alpha
         self.beta = beta
 
         conv_planes = [32, 64, 128, 256, 512, 512, 512]
-        self.conv1 = downsample_conv(3,              conv_planes[0], kernel_size=7)
+        self.conv1 = downsample_conv(nr_input_images*3,              conv_planes[0], kernel_size=7)
         self.conv2 = downsample_conv(conv_planes[0], conv_planes[1], kernel_size=5)
         self.conv3 = downsample_conv(conv_planes[1], conv_planes[2])
         self.conv4 = downsample_conv(conv_planes[2], conv_planes[3])
