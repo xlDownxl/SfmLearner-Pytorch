@@ -213,6 +213,7 @@ def main():
         #logger.valid_writer.write(' * Avg {}'.format(error_string))
 
     for epoch in range(args.epochs):
+        print(epoch)
         #logger.epoch_bar.update(epoch)
 
         # train for one epoch
