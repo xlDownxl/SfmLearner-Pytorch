@@ -126,8 +126,8 @@ def main():
                 sequence_length=args.sequence_length,
                 transform=valid_transform)
         else:
-            from datasets.validation_folders import ValidationSet
-            val_set = ValidationSet(
+            from datasets.validation_folders import CustomValidationSet
+            val_set = CustomValidationSet(
                 args.data,
                 transform=valid_transform
             )
@@ -533,9 +533,11 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
 
     end = time.time()
     #logger.valid_bar.update(0)
-    for i, (tgt_img, depth) in enumerate(val_loader):
+    for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv, depth) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         depth = depth.to(device)
+        print(ref_imgs[0].shape)
+        print(depth.shape)
 
         # compute output
         output_disp = disp_net(tgt_img)
