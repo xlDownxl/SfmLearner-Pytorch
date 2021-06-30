@@ -155,7 +155,7 @@ def main():
     # create model
     print("=> creating model")
 
-    disp_net = models.DispNetS(nr_input_images=2).to(device)
+    disp_net = models.DispNetS(nr_input_images=args.sequence_length//2+1).to(device)
     output_exp = args.mask_loss_weight > 0
     if not output_exp:
         print("=> no mask loss, PoseExpnet will only output pose")
@@ -287,7 +287,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
 
         # compute output
         half = args.sequence_length//2
-        depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+        depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
         #print(depth_input.shape)
         #pose_shape = [depth_input.shape[0],6]
         disparities = disp_net(depth_input)
@@ -369,7 +369,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
 
         # compute output
         half = args.sequence_length//2
-        depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+        depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
         disp = disp_net(depth_input)
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
@@ -549,7 +549,7 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
         # compute output
 
         half = args.sequence_length//2
-        depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+        depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
         output_disp = disp_net(depth_input)
         output_depth = 1/output_disp[:, 0]
 
