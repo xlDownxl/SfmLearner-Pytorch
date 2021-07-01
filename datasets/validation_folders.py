@@ -71,25 +71,24 @@ class CustomValidationSet(data.Dataset):
         demi_length = (sequence_length-1)//2
         shifts = list(range(-demi_length, demi_length + 1))
         shifts.pop(demi_length)
-        depths = []
+   
         for scene in self.scenes:
             intrinsics = np.genfromtxt(scene/'cam.txt').astype(np.float32).reshape((3, 3))
             imgs = sorted(scene.files('*.jpg'))
             if len(imgs) < sequence_length:
                 continue
-            current_depth = []
+            depths = []
             for img in imgs:
                 d = img.dirname()/(img.name[:-4] + '.npy')
                 assert(d.isfile()), "depth file {} not found".format(str(d))
                 depths.append(d)
-                #print(d)
 
             for i in range(demi_length, len(imgs)-demi_length):
                 sample = {'intrinsics': intrinsics, 'tgt': imgs[i], 'ref_imgs': [], 'depth': depths[i]}
                 for j in shifts:
                     sample['ref_imgs'].append(imgs[i+j])
                 sequence_set.append(sample)
-        random.shuffle(sequence_set)
+
         self.samples = sequence_set
 
     def __getitem__(self, index):
