@@ -19,6 +19,7 @@ def save_path_formatter(args, parser):
         folder_string.append('{}epochs'.format(args_dict['epochs']))
     keys_with_prefix = OrderedDict()
     keys_with_prefix['epoch_size'] = 'epoch_size'
+    keys_with_prefix['image_number_depth'] = 'imgs'
     keys_with_prefix['sequence_length'] = 'seq'
     keys_with_prefix['rotation_mode'] = 'rot_'
     keys_with_prefix['padding_mode'] = 'padding_'

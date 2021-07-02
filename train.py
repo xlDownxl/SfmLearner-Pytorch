@@ -74,6 +74,10 @@ parser.add_argument('-f', '--training-output-freq', type=int,
                     help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
                          'if 0, will not output',
                     metavar='N', default=0)
+                    
+parser.add_argument('-i', '--image-number-depth', type=int,
+                    help='number of images feed into depthnet',
+                    metavar='N', default=1)
 
 best_error = -1
 n_iter = 0
@@ -156,7 +160,7 @@ def main():
     # create model
     print("=> creating model")
 
-    disp_net = models.DispNetS(nr_input_images=args.sequence_length//2+1).to(device)
+    disp_net = models.DispNetS(nr_input_images=args.image_number_depth).to(device)
     output_exp = args.mask_loss_weight > 0
     if not output_exp:
         print("=> no mask loss, PoseExpnet will only output pose")
@@ -287,11 +291,17 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         intrinsics = intrinsics.to(device)
 
         # compute output
-        half = args.sequence_length//2
-        depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
-        #print(depth_input.shape)
-        #pose_shape = [depth_input.shape[0],6]
-        disparities = disp_net(depth_input)
+        if args.image_number_depth==1:
+             disparities = disp_net(tgt_img)
+        elif args.image_number_depth==2:          
+             half = args.sequence_length//2
+             depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+             disparities = disp_net(depth_input)
+        else:
+             half = args.sequence_length//2
+             depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
+             disparities = disp_net(depth_input)
+        
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
@@ -369,9 +379,17 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         intrinsics_inv = intrinsics_inv.to(device)
 
         # compute output
-        half = args.sequence_length//2
-        depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
-        disp = disp_net(depth_input)
+        if args.image_number_depth==1:
+             disp = disp_net(tgt_img)
+        elif args.image_number_depth==2:          
+             half = args.sequence_length//2
+             depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+             disp = disp_net(depth_input)
+        else:
+             half = args.sequence_length//2
+             depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
+             disp = disp_net(depth_input)
+             
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
@@ -411,8 +429,8 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         batch_time.update(time.time() - end)
         end = time.time()
         #logger.valid_bar.update(i+1)
-        if i % args.print_freq == 0:
-            logger.valid_writer.write('valid: Time {} Loss {}'.format(batch_time, losses))
+        #if i % args.print_freq == 0:
+        #    logger.valid_writer.write('valid: Time {} Loss {}'.format(batch_time, losses))
     if log_outputs:
         prefix = 'valid poses'
         coeffs_names = ['tx', 'ty', 'tz']
@@ -455,7 +473,16 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         b = tgt_img.shape[0]
 
         # compute output
-        output_disp = disp_net(tgt_img)
+        if args.image_number_depth==1:
+             output_disp = disp_net(tgt_img)
+        elif args.image_number_depth==2:          
+             half = args.sequence_length//2
+             depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+             output_disp = disp_net(depth_input)
+        else:
+             half = args.sequence_length//2
+             depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
+             output_disp = disp_net(depth_input)
         output_depth = 1/output_disp
         explainability_mask, output_poses = pose_exp_net(tgt_img, ref_imgs)
 
@@ -532,7 +559,7 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
     errors = AverageMeter(i=len(error_names))
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
-    batches_to_log = list(np.linspace(0, len(val_loader)-1, sample_nb_to_log).astype(int))
+    batches_to_log = list(np.linspace(0, len(val_loader)-1, len(val_loader)).astype(int))
 
     # switch to evaluate mode
     disp_net.eval()
@@ -549,9 +576,16 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
 
         # compute output
 
-        half = args.sequence_length//2
-        depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
-        output_disp = disp_net(depth_input)
+        if args.image_number_depth==1:
+             output_disp = disp_net(tgt_img)
+        elif args.image_number_depth==2:          
+             half = args.sequence_length//2
+             depth_input = torch.cat((ref_imgs[half],tgt_img),1)
+             output_disp = disp_net(depth_input)
+        else:
+             half = args.sequence_length//2
+             depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
+             output_disp = disp_net(depth_input)
         output_depth = 1/output_disp[:, 0]
 
         if log_outputs and i in batches_to_log:
