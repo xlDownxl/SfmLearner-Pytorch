@@ -79,6 +79,13 @@ parser.add_argument('-i', '--image-number-depth', type=int,
                     help='number of images feed into depthnet',
                     metavar='N', default=1)
 
+parser.add_argument('--height', type=int,
+                    help='number of images feed into depthnet',
+                    metavar='N',)
+parser.add_argument('--width', type=int,
+                    help='number of images feed into depthnet',
+                    metavar='N',)
+
 best_error = -1
 n_iter = 0
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -115,6 +122,8 @@ def main():
     print("=> fetching scenes in '{}'".format(args.data))
     train_set = SequenceFolder(
         args.data,
+        height=args.height,
+        width=args.width,
         transform=train_transform,
         seed=args.seed,
         train=True,
@@ -126,6 +135,7 @@ def main():
         if args.with_pose:
             from datasets.validation_folders import ValidationSetWithPose
             val_set = ValidationSetWithPose(
+                
                 args.data,
                 sequence_length=args.sequence_length,
                 transform=valid_transform)
@@ -133,6 +143,8 @@ def main():
             from datasets.validation_folders import CustomValidationSet
             val_set = CustomValidationSet(
                 args.data,
+                height=args.height,
+                width=args.width,
                 seed=args.seed,
                 sequence_length=args.sequence_length,
                 transform=valid_transform
@@ -140,6 +152,8 @@ def main():
     else:
         val_set = SequenceFolder(
             args.data,
+            height=args.height,
+            width=args.width,
             transform=valid_transform,
             seed=args.seed,
             train=False,

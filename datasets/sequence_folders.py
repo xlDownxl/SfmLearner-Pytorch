@@ -5,7 +5,10 @@ from path import Path
 import random
 import cv2
 def load_as_float(path, height, width):
-    img=cv2.resize(cv2.imread(path), (width,height), interpolation = cv2.INTER_AREA)  
+    if height==None or width ==None:
+        img=cv2.imread(path)  
+    else:
+        img=cv2.resize(cv2.imread(path), (width,height), interpolation = cv2.INTER_AREA)  
     return img.astype(np.float32)
 
 def resize_intrinsics(intrinsics, target_height, target_width, img_height, img_width):
@@ -27,7 +30,7 @@ class SequenceFolder(data.Dataset):
         transform functions must take in a list a images and a numpy array (usually intrinsics matrix)
     """
 
-    def __init__(self, root,height=480, width=640, seed=None, train=True, sequence_length=3, transform=None, target_transform=None):
+    def __init__(self, root, height=None, width=None, seed=None, train=True, sequence_length=3, transform=None, target_transform=None):
         np.random.seed(seed)
         random.seed(seed)
         self.height= height
@@ -45,11 +48,16 @@ class SequenceFolder(data.Dataset):
         shifts.pop(demi_length)
         for scene in self.scenes:
             intrinsics = np.genfromtxt(scene/'cam.txt').astype(np.float32).reshape((3, 3))
-            imgs = sorted(scene.files('*.jpg'))
-            if len(imgs) ==0:
-                imgs = sorted(scene.files('*.png'))
+            imgs = sorted(scene.files('*.jpg'), key = lambda x : int(str(x).split(".")[0].split("/")[-1]))
+            if len(imgs)==0:
+                imgs = sorted(scene.files('*.png'), key = lambda x : int(str(x).split(".")[0].split("/")[-1]))
             dummy_img =cv2.imread(imgs[0])
-            intrinsics = resize_intrinsics(intrinsics,self.height,self.width,*dummy_img.shape[0:2])
+
+
+            if self.width !=None and self.height!=None:
+                print(self.width)
+                print(self.height)
+                intrinsics = resize_intrinsics(intrinsics,self.height,self.width,*dummy_img.shape[0:2])
             if len(imgs) < sequence_length:
                 continue
             for i in range(demi_length, len(imgs)-demi_length):
