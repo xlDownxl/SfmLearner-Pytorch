@@ -67,12 +67,19 @@ COLORMAPS = {'rainbow': opencv_rainbow(),
              'bone': cm.get_cmap('bone', 10000)}
 
 
-def log_output_tensorboard(writer, prefix, index, suffix, n_iter, depth, disp, warped, diff, mask):
+def log_output_tensorboard(writer, prefix, index, suffix, n_iter, depth, disp, warped, diff, mask, disparities, uncertainties):
     disp_to_show = tensor2array(disp[0], max_value=None, colormap='magma')
     depth_to_show = tensor2array(depth[0], max_value=None)
-    writer.add_image('{} Dispnet Output Normalized{}/{}'.format(prefix, suffix, index), disp_to_show, n_iter)
-    writer.add_image('{} Depth Output Normalized{}/{}'.format(prefix, suffix, index), depth_to_show, n_iter)
+    writer.add_image('{} Dispnet Averaged {}/{}'.format(prefix, suffix, index), disp_to_show, n_iter)
+    writer.add_image('{} Depth Averaged {}/{}'.format(prefix, suffix, index), depth_to_show, n_iter)
     # log warped images along with explainability mask
+
+    for j, (disp, uncertainty) in enumerate(zip(disparities, uncertainties)): 
+        disp_to_show = tensor2array(disp[0], max_value=None, colormap='magma')
+        writer.add_image('{} Dispnet Output Nr {} {}/{}'.format(prefix, j,suffix, index), disp_to_show, n_iter)
+        unvertainty_to_show = tensor2array(uncertainty[0], max_value=None, colormap='magma')
+        writer.add_image('{} Uncertainty Output Nr {} {}/{}'.format(prefix, j,suffix, index), unvertainty_to_show, n_iter)
+
     if (warped is None) or (diff is None):
         return
     for j, (warped_j, diff_j) in enumerate(zip(warped, diff)):

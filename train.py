@@ -407,7 +407,9 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
             depth_input = torch.cat((ref,tgt_img),1)
             disparities.append(disp_net(depth_input))
         
+
         disp = torch.mean(torch.stack(disparities),dim=0)
+        disp_certainty = torch.var(torch.stack(disparities),dim=0)
              
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
@@ -430,7 +432,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
                     tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(tgt_img[0]), 0)
                     tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(ref[0]), 1)
 
-            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0], diff[0], explainability_mask)
+            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0], diff[0], explainability_mask, disparities, disp_certainty)
 
         if log_outputs and i < len(val_loader)-1:
             step = args.batch_size*(args.sequence_length-1)
