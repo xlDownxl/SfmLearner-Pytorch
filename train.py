@@ -78,9 +78,7 @@ parser.add_argument('--use-edge-smooth', type=int,
                     help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
                          'if 0, will not output',
                     metavar='N', default=0)                  
-parser.add_argument('-i', '--image-number-depth', type=int,
-                    help='number of images feed into depthnet',
-                    metavar='N', default=1)
+
 parser.add_argument('--height', type=int,
                     help='number of images feed into depthnet',
                     metavar='N',)
@@ -176,7 +174,7 @@ def main():
     # create model
     print("=> creating model")
 
-    disp_net = models.DispNetS(nr_input_images=args.image_number_depth).to(device)
+    disp_net = models.DispNetS().to(device)
     output_exp = args.mask_loss_weight > 0
     if not output_exp:
         print("=> no mask loss, PoseExpnet will only output pose")
@@ -309,19 +307,23 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         ref_imgs = [img.to(device) for img in ref_imgs]
         
         intrinsics = intrinsics.to(device)
-
+        disparities=[]
         # compute output
-        if args.image_number_depth==1:
-             disparities = disp_net(tgt_img)
-        elif args.image_number_depth==2:          
-             half = args.sequence_length//2
-             depth_input = torch.cat((ref_imgs[half],tgt_img),1)
-             disparities = disp_net(depth_input)
-        else:
-             half = args.sequence_length//2
-             depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
-             disparities = disp_net(depth_input)
+        for ref in ref_imgs:
         
+            depth_input = torch.cat((ref,tgt_img),1)
+            disparities.append(disp_net(depth_input))
+        avg_disparities=[]
+        
+        for size in range(len(disparities[0])):
+            a=disparities[0][size]
+            b=disparities[1][size]
+            c=disparities[2][size]
+            d=disparities[3][size]
+            avg = torch.mean(torch.stack((a,b,c,d)),dim=0)
+            avg_disparities.append(avg)
+        
+        disparities=avg_disparities
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
@@ -398,17 +400,14 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         intrinsics = intrinsics.to(device)
         intrinsics_inv = intrinsics_inv.to(device)
 
+        disparities=[]
         # compute output
-        if args.image_number_depth==1:
-             disp = disp_net(tgt_img)
-        elif args.image_number_depth==2:          
-             half = args.sequence_length//2
-             depth_input = torch.cat((ref_imgs[half],tgt_img),1)
-             disp = disp_net(depth_input)
-        else:
-             half = args.sequence_length//2
-             depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
-             disp = disp_net(depth_input)
+        for ref in ref_imgs:
+        
+            depth_input = torch.cat((ref,tgt_img),1)
+            disparities.append(disp_net(depth_input))
+        
+        disp = torch.mean(torch.stack(disparities),dim=0)
              
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
@@ -476,7 +475,6 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
     batches_to_log = list(np.linspace(0, len(val_loader), sample_nb_to_log).astype(int))
-    poses_values = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
     disp_values = np.zeros(((len(val_loader)-1) * args.batch_size * 3))
 
     # switch to evaluate mode
