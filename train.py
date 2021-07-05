@@ -525,14 +525,26 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         final_poses[..., -1:] += first_inv_transform[..., -1:]
         final_poses = final_poses.reshape(b, -1, 3, 4)
 
-        if log_outputs and i in batches_to_log:  # log first output of wanted batches
+        if log_outputs and i in batches_to_log:
             index = batches_to_log.index(i)
             if epoch == 0:
-                for j, ref in enumerate(ref_imgs):
-                    tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(tgt_img[0]), 0)
-                    tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(ref[0]), 1)
+                tb_writer.add_image('val Input/{}'.format(index), tensor2array(tgt_img[0]), 0)
+                depth_to_show = gt_depth[0]
+                tb_writer.add_image('val target Depth Normalized/{}'.format(index),
+                                    tensor2array(depth_to_show, max_value=None),
+                                    epoch)
+                depth_to_show[depth_to_show == 0] = 1000
+                disp_to_show = (1/depth_to_show).clamp(0, 10)
+                tb_writer.add_image('val target Disparity Normalized/{}'.format(index),
+                                    tensor2array(disp_to_show, max_value=None, colormap='magma'),
+                                    epoch)
 
-            log_output_tensorboard(tb_writer, 'val', index, '', epoch, output_depth, output_disp, None, None, explainability_mask)
+            tb_writer.add_image('val Dispnet Output Normalized/{}'.format(index),
+                                tensor2array(output_disp[0], max_value=None, colormap='magma'),
+                                epoch)
+            tb_writer.add_image('val Depth Output Normalized/{}'.format(index),
+                                tensor2array(output_depth[0], max_value=None),
+                                epoch)
 
         if log_outputs and i < len(val_loader)-1:
             step = args.batch_size*(args.sequence_length-1)
@@ -549,14 +561,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        #logger.valid_bar.update(i+1)
-        #if i % args.print_freq == 0:
-            #.valid_writer.write(
-            #    'valid: Time {} Abs Error {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(batch_time,
-             #                                                                          depth_errors.val[0],
-             #                                                                          depth_errors.avg[0],
-             #                                                                          pose_errors.val[0],
-             #                                                                          pose_errors.avg[0]))
+                                                                   
     if log_outputs:
         prefix = 'valid poses'
         coeffs_names = ['tx', 'ty', 'tz']
@@ -586,15 +591,11 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
 
     end = time.time()
     #logger.valid_bar.update(0)
-    for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv, depth) in enumerate(val_loader):
+    for i, (tgt_img, ref_imgs, depth) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         depth = depth.to(device)
 
         ref_imgs = [img.to(device) for img in ref_imgs]
-        #print(ref_imgs[0].shape)
-        #print(depth.shape)
-
-        # compute output
 
         if args.image_number_depth==1:
              output_disp = disp_net(tgt_img)
