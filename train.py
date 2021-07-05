@@ -11,7 +11,7 @@ import custom_transforms
 import models
 from utils import tensor2array, save_checkpoint, save_path_formatter, log_output_tensorboard
 
-from loss_functions import photometric_reconstruction_loss, explainability_loss, smooth_loss
+from loss_functions import photometric_reconstruction_loss, explainability_loss, smooth_loss, compute_smooth_loss
 from loss_functions import compute_depth_errors, compute_pose_errors
 from inverse_warp import pose_vec2mat
 from logger import TermLogger, AverageMeter
@@ -74,11 +74,13 @@ parser.add_argument('-f', '--training-output-freq', type=int,
                     help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
                          'if 0, will not output',
                     metavar='N', default=0)
-                    
+parser.add_argument('--use-edge-smooth', type=int,
+                    help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
+                         'if 0, will not output',
+                    metavar='N', default=0)                  
 parser.add_argument('-i', '--image-number-depth', type=int,
                     help='number of images feed into depthnet',
                     metavar='N', default=1)
-
 parser.add_argument('--height', type=int,
                     help='number of images feed into depthnet',
                     metavar='N',)
@@ -199,6 +201,10 @@ def main():
     pose_exp_net = torch.nn.DataParallel(pose_exp_net)
 
     print('=> setting adam solver')
+    if args.use_edge_smooth:
+        print('=> using edge aware smooth loss')
+    else:
+        print('=> using basic smooth loss')
 
     optim_params = [
         {'params': disp_net.parameters(), 'lr': args.lr},
@@ -326,7 +332,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
             loss_2 = explainability_loss(explainability_mask)
         else:
             loss_2 = 0
-        loss_3 = smooth_loss(depth)
+        loss_3 = compute_smooth_loss(depth,tgt_img,args.use_edge_smooth)
 
         loss = w1*loss_1 + w2*loss_2 + w3*loss_3
 
@@ -416,7 +422,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
             loss_2 = explainability_loss(explainability_mask).item()
         else:
             loss_2 = 0
-        loss_3 = smooth_loss(depth).item()
+        loss_3 = compute_smooth_loss([depth],tgt_img,args.use_edge_smooth).item()
 
         if log_outputs and i in batches_to_log:  # log first output of wanted batches
             index = batches_to_log.index(i)

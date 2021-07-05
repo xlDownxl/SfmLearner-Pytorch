@@ -88,6 +88,52 @@ def smooth_loss(pred_map):
         weight /= 2.3  # don't ask me why it works better
     return loss
 
+def compute_smooth_loss(tgt_depth, tgt_img, use_edge_smooth):
+    def get_smooth_loss_edge(disp, img):
+        mean_disp = disp.mean(2, True).mean(3, True)
+        norm_disp = disp / (mean_disp + 1e-7)
+        disp = norm_disp
+
+        grad_disp_x = torch.abs(disp[:, :, :, :-1] - disp[:, :, :, 1:])
+        grad_disp_y = torch.abs(disp[:, :, :-1, :] - disp[:, :, 1:, :])
+
+        grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
+        grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
+
+        grad_disp_x *= torch.exp(-grad_img_x)
+        grad_disp_y *= torch.exp(-grad_img_y)
+
+        return grad_disp_x.mean() + grad_disp_y.mean()
+
+    def get_smooth_loss(disp):
+
+
+        mean_disp = disp.mean(2, True).mean(3, True)
+        norm_disp = disp / (mean_disp + 1e-7)
+        disp = norm_disp
+
+        grad_disp_x = torch.abs(disp[:, :, :, :-1] - disp[:, :, :, 1:])
+        grad_disp_y = torch.abs(disp[:, :, :-1, :] - disp[:, :, 1:, :])
+
+        return grad_disp_x.mean() + grad_disp_y.mean()
+    
+    weight = 1.
+    loss = 0
+    for s in range(len(tgt_depth)):
+        _, _, h, w = tgt_depth[s].size()
+        if s == 0:
+            tgt_img_scaled = tgt_img
+        else:
+            tgt_img_scaled = F.interpolate(tgt_img, (h, w), mode='area')
+        
+        if use_edge_smooth:
+            loss+= get_smooth_loss_edge(tgt_depth[s], tgt_img_scaled)*weight
+        else:
+            loss+= get_smooth_loss(tgt_depth[s])*weight
+        weight /= 2.3
+
+    return loss
+
 
 @torch.no_grad()
 def compute_depth_errors(gt, pred, crop=True):
