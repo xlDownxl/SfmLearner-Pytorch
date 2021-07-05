@@ -115,8 +115,8 @@ class CustomValidationSet(data.Dataset):
         tgt_img = load_as_float(sample['tgt'],self.height,self.width)
         tgt_depth = np.load(sample['depth']).astype(np.float32)  
         if self.width !=None and self.height!=None:
-            tgt_depth = np.resize(tgt_depth,(self.height,self.width))
-
+            tgt_depth = cv2.resize(tgt_depth, dsize=(self.width,self.height), interpolation=cv2.INTER_NEAREST) #inter nearest is needed, otherwise the interpolation makes some
+                                                                                                               #really small numbers from zeros and the disparity in tensorboard is ruined
         ref_imgs = [load_as_float(ref_img,self.height,self.width) for ref_img in sample['ref_imgs']]
         if self.transform is not None:
             imgs, intrinsics = self.transform([tgt_img] + ref_imgs, np.copy(sample['intrinsics']))

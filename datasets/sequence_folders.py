@@ -55,8 +55,6 @@ class SequenceFolder(data.Dataset):
 
 
             if self.width !=None and self.height!=None:
-                print(self.width)
-                print(self.height)
                 intrinsics = resize_intrinsics(intrinsics,self.height,self.width,*dummy_img.shape[0:2])
             if len(imgs) < sequence_length:
                 continue
