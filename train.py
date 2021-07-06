@@ -1,7 +1,7 @@
 import argparse
 import time
 import csv
-
+import os
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -10,13 +10,17 @@ import torch.utils.data
 import custom_transforms
 import models
 from utils import tensor2array, save_checkpoint, save_path_formatter, log_output_tensorboard
-
+from path import Path
 from loss_functions import photometric_reconstruction_loss, explainability_loss, smooth_loss, compute_smooth_loss
 from loss_functions import compute_depth_errors, compute_pose_errors
 from inverse_warp import pose_vec2mat
 from logger import TermLogger, AverageMeter
 from tensorboardX import SummaryWriter
-
+import datetime
+from imageio import imread, imsave
+from skimage.transform import resize
+import glob
+from collections import OrderedDict
 parser = argparse.ArgumentParser(description='Structure from Motion Learner training on KITTI and CityScapes Dataset',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -94,6 +98,39 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 
 def main():
+    def make_param_file(args,save_path):    
+        args_dict = vars(args)
+        data_folder_name = str(Path(args_dict['data']).normpath().name)
+        folder_string = []
+        folder_string.append('{} epochs'.format(args_dict['epochs']))
+        keys_with_prefix = OrderedDict()
+        keys_with_prefix['epoch_size'] = 'epoch_size '
+        keys_with_prefix['sequence_length'] = 'sequence_length '
+        keys_with_prefix['rotation_mode'] = 'rot'
+        keys_with_prefix['padding_mode'] = 'padding '
+        keys_with_prefix['batch_size'] = 'batch_size '
+        keys_with_prefix['lr'] = 'lr '
+        keys_with_prefix['photo_loss_weight'] = 'photo_loss_weight '
+        keys_with_prefix['mask_loss_weight'] = 'mask_loss_weight '
+        keys_with_prefix['smooth_loss_weight'] = 'smooth_loss_weight '
+        keys_with_prefix['use_edge_smooth'] = 'use_edge_smooth '
+        keys_with_prefix['width'] = 'width '
+        keys_with_prefix['height'] = 'height '
+        keys_with_prefix['with_gt'] = 'with_gt '
+        
+        for key, prefix in keys_with_prefix.items():
+            value = args_dict[key]
+            folder_string.append('{}{}'.format(prefix, value))
+
+        timestamp = datetime.datetime.now().strftime("%m-%d-%H:%M")
+        folder_string.append('timestamp '+timestamp)
+        commit_id = Path(os.popen("git log --pretty=format:'%h' -n 1").read())
+        folder_string.append('Git Commit ID '+commit_id)
+        commit_message = Path(os.popen("git log -1").read())
+        folder_string.append('Git Message '+commit_message)
+        params = '\n'.join(folder_string)
+        with open(save_path/'params.txt', 'w') as f:
+            f.write(params)
     global best_error, n_iter, device
     args = parser.parse_args()
     if args.dataset_format == 'stacked':
@@ -102,8 +139,14 @@ def main():
         from datasets.sequence_folders import SequenceFolder
     save_path = save_path_formatter(args, parser)
     args.save_path = 'checkpoints'/save_path
+    if os.path.isdir(args.save_path):
+        print("dir already exist (probably bash mode), want to override?")
+        input1 = input("press enter to override, any other key to cancel")
+        if str(input1)!="":
+            exit()
     print('=> will save everything to {}'.format(args.save_path))
     args.save_path.makedirs_p()
+    make_param_file(args,args.save_path)
     torch.manual_seed(args.seed)
     if args.evaluate:
         args.epochs = 0
@@ -261,6 +304,8 @@ def main():
         for error, name in zip(errors, error_names):
             tb_writer.add_scalar(name, error, epoch)
 
+        if "crane" in args.data:
+            validate_vslam(args,  disp_net, epoch, tb_writer)
         # Up to you to chose the most relevant error to measure your model's performance, careful some measures are to maximize (such as a1,a2,a3)
         decisive_error = errors[1]
         if best_error < 0:
@@ -529,7 +574,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
             index = batches_to_log.index(i)
             if epoch == 0:
                 tb_writer.add_image('val Input/{}'.format(index), tensor2array(tgt_img[0]), 0)
-                depth_to_show = gt_depth[0]
+                depth_to_show = torch.clone(gt_depth[0])
                 tb_writer.add_image('val target Depth Normalized/{}'.format(index),
                                     tensor2array(depth_to_show, max_value=None),
                                     epoch)
@@ -640,6 +685,50 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
     #logger.valid_bar.update(len(val_loader))
     return errors.avg, error_names
 
+@torch.no_grad()
+def validate_vslam(args, disp_net, epoch, tb_writer):
+
+    test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
+
+    #print('{} files to test'.format(len(test_files)))
+    
+    #os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
+    #os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
+
+    previous_img = test_files[0]
+    previous_img = imread(previous_img)
+
+    h,w,_ = previous_img.shape
+    if (h != args.height or w != args.width):
+        previous_img = resize(previous_img, (args.height, args.width))
+    previous_img = np.transpose(previous_img, (2, 0, 1))
+
+    previous_img = torch.from_numpy(previous_img.astype(np.float32)).unsqueeze(0)
+    previous_img = ((previous_img - 0.5)/0.5).to(device)
+
+    for i in range(1,len(test_files)):
+        current_img = test_files[i] 
+        current_img = imread(current_img)
+
+        h,w,_ = current_img.shape
+        if (h != args.height or w != args.width):
+            current_img = resize(current_img, (args.height, args.width))
+        current_img = np.transpose(current_img, (2, 0, 1))
+
+        current_img = torch.from_numpy(current_img.astype(np.float32)).unsqueeze(0)
+        current_img = ((current_img - 0.5)/0.5).to(device)
+
+        output = disp_net(current_img)[0]
+
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(output, max_value=None, colormap='magma'),
+                                epoch)
+        depth = 1/output
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(depth, max_value=None),
+                                epoch)
+        
+        previous_img=current_img
 
 if __name__ == '__main__':
     main()
