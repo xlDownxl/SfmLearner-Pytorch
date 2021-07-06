@@ -303,6 +303,8 @@ def main():
         for error, name in zip(errors, error_names):
             tb_writer.add_scalar(name, error, epoch)
 
+        if "crane" in args.data:
+            validate_vslam(args,  disp_net, epoch,)
         # Up to you to chose the most relevant error to measure your model's performance, careful some measures are to maximize (such as a1,a2,a3)
         decisive_error = errors[1]
         if best_error < 0:
@@ -620,6 +622,52 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         tb_writer.add_histogram('disp_values', disp_values, epoch)
     #logger.valid_bar.update(len(val_loader))
     return depth_errors.avg + pose_errors.avg, depth_error_names + pose_error_names
+
+@torch.no_grad()
+def validate_vslam(args, disp_net, epoch):
+    from imageio import imread, imsave
+    from skimage.transform import resize
+    import glob
+    test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
+
+    print('{} files to test'.format(len(test_files)))
+    
+    os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
+    os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
+
+    previous_img = test_files[0]
+    previous_img = imread(previous_img)
+
+    h,w,_ = previous_img.shape
+    if (h != args.height or w != args.width):
+        previous_img = resize(previous_img, (args.height, args.width))
+    previous_img = np.transpose(previous_img, (2, 0, 1))
+
+    previous_img = torch.from_numpy(previous_img.astype(np.float32)).unsqueeze(0)
+    previous_img = ((previous_img - 0.5)/0.5).to(device)
+
+    for i in range(1,len(test_files)):
+        current_img = test_files[i] 
+        current_img = imread(current_img)
+
+        h,w,_ = current_img.shape
+        if (h != args.height or w != args.width):
+            current_img = resize(current_img, (args.height, args.width))
+        current_img = np.transpose(current_img, (2, 0, 1))
+
+        current_img = torch.from_numpy(current_img.astype(np.float32)).unsqueeze(0)
+        current_img = ((current_img - 0.5)/0.5).to(device)
+
+        output = disp_net(torch.cat((previous_img,current_img),1))[0]
+
+      
+        disp = (255*tensor2array(output, max_value=None, colormap='bone')).astype(np.uint8)
+        imsave(args.save_path/str('vslam/disp/'+str(epoch)+"/"+test_files[i].split("/")[-1]), np.transpose(disp, (1,2,0)))
+        
+        depth = 1/output
+        depth = (255*tensor2array(depth, max_value=10, colormap='rainbow')).astype(np.uint8)
+        imsave(args.save_path/str('vslam/depth/'+str(epoch)+"/"+test_files[i].split("/")[-1]), np.transpose(depth, (1,2,0)))
+        previous_img=current_img
 
 
 @torch.no_grad()
