@@ -18,7 +18,9 @@ from inverse_warp import pose_vec2mat
 from logger import TermLogger, AverageMeter
 from tensorboardX import SummaryWriter
 import datetime
-
+from imageio import imread, imsave
+from skimage.transform import resize
+import glob
 
 parser = argparse.ArgumentParser(description='Structure from Motion Learner training on KITTI and CityScapes Dataset',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -577,7 +579,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
             index = batches_to_log.index(i)
             if epoch == 0:
                 tb_writer.add_image('val Input/{}'.format(index), tensor2array(tgt_img[0]), 0)
-                depth_to_show = gt_depth[0]
+                depth_to_show = torch.clone(gt_depth[0])
                 tb_writer.add_image('val target Depth Normalized/{}'.format(index),
                                     tensor2array(depth_to_show, max_value=None),
                                     epoch)
@@ -625,9 +627,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
 
 @torch.no_grad()
 def validate_vslam(args, disp_net, epoch, tb_writer):
-    from imageio import imread, imsave
-    from skimage.transform import resize
-    import glob
+
     test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
 
     #print('{} files to test'.format(len(test_files)))
