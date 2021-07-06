@@ -453,7 +453,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         
 
         disp = torch.mean(torch.stack(disparities),dim=0)
-        disp_certainty = torch.var(torch.stack(disparities),dim=0)
+        disp_uncertainty = torch.var(torch.stack(disparities),dim=0)
              
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
@@ -476,7 +476,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
                     tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(tgt_img[0]), 0)
                     tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(ref[0]), 1)
 
-            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0], diff[0], explainability_mask, disparities, disp_certainty)
+            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0], diff[0], explainability_mask, disparities, disp_uncertainty)
 
         if log_outputs and i < len(val_loader)-1:
             step = args.batch_size*(args.sequence_length-1)
@@ -521,6 +521,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
     batches_to_log = list(np.linspace(0, len(val_loader), sample_nb_to_log).astype(int))
+    poses_values = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
     disp_values = np.zeros(((len(val_loader)-1) * args.batch_size * 3))
 
     # switch to evaluate mode
@@ -537,16 +538,17 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         b = tgt_img.shape[0]
 
         # compute output
-        if args.image_number_depth==1:
-             output_disp = disp_net(tgt_img)
-        elif args.image_number_depth==2:          
-             half = args.sequence_length//2
-             depth_input = torch.cat((ref_imgs[half],tgt_img),1)
-             output_disp = disp_net(depth_input)
-        else:
-             half = args.sequence_length//2
-             depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
-             output_disp = disp_net(depth_input)
+        disparities=[]
+        # compute output
+        for ref in ref_imgs:
+        
+            depth_input = torch.cat((ref,tgt_img),1)
+            disparities.append(disp_net(depth_input))
+        
+
+        output_disp = torch.mean(torch.stack(disparities),dim=0)
+        #disp_uncertainty = torch.var(torch.stack(disparities),dim=0)
+
         output_depth = 1/output_disp
         explainability_mask, output_poses = pose_exp_net(tgt_img, ref_imgs)
 
@@ -649,7 +651,7 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
         
 
         output_disp = torch.mean(torch.stack(disparities),dim=0)
-        disp_certainty = torch.var(torch.stack(disparities),dim=0)
+        #disp_uncertainty = torch.var(torch.stack(disparities),dim=0)
              
       
         output_depth = 1/output_disp[:, 0]
