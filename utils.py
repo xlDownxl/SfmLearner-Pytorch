@@ -10,19 +10,15 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import os
 
 def save_path_formatter(args, parser):
-
     job_id = os.getenv('SLURM_JOB_ID')
     job_name = os.getenv('SLURM_JOB_NAME')
-    commit = os.getenv('GIT_VERSION')
-    print(job_id)
-    print(job_name)
-    print(commit)
+    commit = Path(os.popen("git log --pretty=format:'%h' -n 1").read())
 
     args_dict = vars(args)
     data_folder_name = str(Path(args_dict['data']).normpath().name)
 
     save_path = Path(','.join([job_name,job_id]))
-    return data_folder_name/save_path
+    return data_folder_name/commit/save_path
 
 
 

@@ -17,6 +17,8 @@ from loss_functions import compute_depth_errors, compute_pose_errors
 from inverse_warp import pose_vec2mat
 from logger import TermLogger, AverageMeter
 from tensorboardX import SummaryWriter
+import datetime
+
 
 parser = argparse.ArgumentParser(description='Structure from Motion Learner training on KITTI and CityScapes Dataset',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -93,8 +95,7 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 
 def main():
-    def make_param_file(args,save_path):
-        
+    def make_param_file(args,save_path):    
         args_dict = vars(args)
         data_folder_name = str(Path(args_dict['data']).normpath().name)
         folder_string = []
@@ -113,12 +114,17 @@ def main():
         keys_with_prefix['width'] = 'width '
         keys_with_prefix['height'] = 'height '
         keys_with_prefix['with_gt'] = 'with_gt '
-
-
+        
         for key, prefix in keys_with_prefix.items():
             value = args_dict[key]
             folder_string.append('{}{}'.format(prefix, value))
 
+        timestamp = datetime.datetime.now().strftime("%m-%d-%H:%M")
+        folder_string.append('timestamp '+timestamp)
+        commit_id = Path(os.popen("git log --pretty=format:'%h' -n 1").read())
+        folder_string.append('Git Commit ID '+commit_id)
+        commit_message = Path(os.popen("git log -1").read())
+        folder_string.append('Git Message '+commit_message)
         params = '\n'.join(folder_string)
         with open(save_path/'params.txt', 'w') as f:
             f.write(params)
