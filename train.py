@@ -304,7 +304,7 @@ def main():
             tb_writer.add_scalar(name, error, epoch)
 
         if "crane" in args.data:
-            validate_vslam(args,  disp_net, epoch,)
+            validate_vslam(args,  disp_net, epoch, tb_writer)
         # Up to you to chose the most relevant error to measure your model's performance, careful some measures are to maximize (such as a1,a2,a3)
         decisive_error = errors[1]
         if best_error < 0:
@@ -624,16 +624,16 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
     return depth_errors.avg + pose_errors.avg, depth_error_names + pose_error_names
 
 @torch.no_grad()
-def validate_vslam(args, disp_net, epoch):
+def validate_vslam(args, disp_net, epoch, tb_writer):
     from imageio import imread, imsave
     from skimage.transform import resize
     import glob
     test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
 
-    print('{} files to test'.format(len(test_files)))
+    #print('{} files to test'.format(len(test_files)))
     
-    os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
-    os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
+    #os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
+    #os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
 
     previous_img = test_files[0]
     previous_img = imread(previous_img)
@@ -660,13 +660,14 @@ def validate_vslam(args, disp_net, epoch):
 
         output = disp_net(torch.cat((previous_img,current_img),1))[0]
 
-      
-        disp = (255*tensor2array(output, max_value=None, colormap='bone')).astype(np.uint8)
-        imsave(args.save_path/str('vslam/disp/'+str(epoch)+"/"+test_files[i].split("/")[-1]), np.transpose(disp, (1,2,0)))
-        
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(output, max_value=None, colormap='magma'),
+                                epoch)
         depth = 1/output
-        depth = (255*tensor2array(depth, max_value=10, colormap='rainbow')).astype(np.uint8)
-        imsave(args.save_path/str('vslam/depth/'+str(epoch)+"/"+test_files[i].split("/")[-1]), np.transpose(depth, (1,2,0)))
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(depth, max_value=None),
+                                epoch)
+        
         previous_img=current_img
 
 
