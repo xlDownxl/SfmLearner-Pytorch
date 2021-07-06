@@ -92,6 +92,10 @@ parser.add_argument('--width', type=int,
                     help='number of images feed into depthnet',
                     metavar='N',)
 
+parser.add_argument('--minimum-reprojection-error', type=int,
+                    help='put 1 if minimum reprojetion error should be used',
+                    metavar='N',default=0)
+
 best_error = -1
 n_iter = 0
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -373,7 +377,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
 
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
                                                                depth, explainability_mask, pose,
-                                                               args.rotation_mode, args.padding_mode)
+                                                               args.rotation_mode, args.padding_mode,args.minimum_reprojection_error)
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask)
         else:
@@ -462,7 +466,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs,
                                                                intrinsics, depth,
                                                                explainability_mask, pose,
-                                                               args.rotation_mode, args.padding_mode)
+                                                               args.rotation_mode, args.padding_mode, args.minimum_reprojection_error)
         loss_1 = loss_1.item()
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask).item()

@@ -8,7 +8,7 @@ from inverse_warp import inverse_warp
 
 def photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
                                     depth, explainability_mask, pose,
-                                    rotation_mode='euler', padding_mode='zeros'):
+                                    rotation_mode='euler', padding_mode='zeros', minimum_reprojection=False):
     def one_scale(depth, explainability_mask):
         assert(explainability_mask is None or depth.size()[2:] == explainability_mask.size()[2:])
         assert(pose.size(1) == len(ref_imgs))
@@ -23,6 +23,7 @@ def photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
 
         warped_imgs = []
         diff_maps = []
+        reconstruction_losses=[]
 
         for i, ref_img in enumerate(ref_imgs_scaled):
             current_pose = pose[:, i]
@@ -35,13 +36,13 @@ def photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
             if explainability_mask is not None:
                 diff = diff * explainability_mask[:,i:i+1].expand_as(diff)
 
-            reconstruction_loss += diff.abs().mean()
-            assert((reconstruction_loss == reconstruction_loss).item() == 1)
+            reconstruction_losses.append(diff.abs().mean(1, True))
+            
 
             warped_imgs.append(ref_img_warped[0])
             diff_maps.append(diff[0])
 
-        return reconstruction_loss, warped_imgs, diff_maps
+        return reconstruction_losses, warped_imgs, diff_maps
 
     warped_results, diff_results = [], []
     if type(explainability_mask) not in [tuple, list]:
@@ -51,7 +52,13 @@ def photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
 
     total_loss = 0
     for d, mask in zip(depth, explainability_mask):
-        loss, warped, diff = one_scale(d, mask)
+        losses, warped, diff = one_scale(d, mask)
+        if minimum_reprojection:
+            loss, idxs = torch.min(torch.cat(losses,1),dim=1)
+            loss=loss.mean()
+        else:
+            losses = [a.mean() for a in losses]
+            loss=sum(losses)
         total_loss += loss
         warped_results.append(warped)
         diff_results.append(diff)
