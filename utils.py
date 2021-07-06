@@ -7,35 +7,23 @@ import datetime
 from collections import OrderedDict
 from matplotlib import cm
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
-
+import os
 
 def save_path_formatter(args, parser):
-    def is_default(key, value):
-        return value == parser.get_default(key)
+
+    job_id = os.getenv('SLURM_JOB_ID')
+    job_name = os.getenv('SLURM_JOB_NAME')
+    commit = os.getenv('GIT_VERSION')
+    print(job_id)
+    print(job_name)
+    print(commit)
+
     args_dict = vars(args)
     data_folder_name = str(Path(args_dict['data']).normpath().name)
-    folder_string = [data_folder_name]
-    if not is_default('epochs', args_dict['epochs']):
-        folder_string.append('{}epochs'.format(args_dict['epochs']))
-    keys_with_prefix = OrderedDict()
-    keys_with_prefix['epoch_size'] = 'epoch_size'
-    keys_with_prefix['sequence_length'] = 'seq'
-    keys_with_prefix['rotation_mode'] = 'rot_'
-    keys_with_prefix['padding_mode'] = 'padding_'
-    keys_with_prefix['batch_size'] = 'b'
-    keys_with_prefix['lr'] = 'lr'
-    keys_with_prefix['photo_loss_weight'] = 'p'
-    keys_with_prefix['mask_loss_weight'] = 'm'
-    keys_with_prefix['smooth_loss_weight'] = 's'
-    keys_with_prefix['use_edge_smooth'] = 'e'
 
-    for key, prefix in keys_with_prefix.items():
-        value = args_dict[key]
-        if not is_default(key, value):
-            folder_string.append('{}{}'.format(prefix, value))
-    save_path = Path(','.join(folder_string))
-    timestamp = datetime.datetime.now().strftime("%m-%d-%H:%M")
-    return save_path/timestamp
+    save_path = Path(','.join([job_name,job_id]))
+    return data_folder_name/save_path
+
 
 
 def high_res_colormap(low_res_cmap, resolution=1000, max_value=1):

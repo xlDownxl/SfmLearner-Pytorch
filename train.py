@@ -1,7 +1,8 @@
 import argparse
 import time
 import csv
-
+from collections import OrderedDict
+import os
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -10,7 +11,7 @@ import torch.utils.data
 import custom_transforms
 import models
 from utils import tensor2array, save_checkpoint, save_path_formatter, log_output_tensorboard
-
+from path import Path
 from loss_functions import photometric_reconstruction_loss, explainability_loss, smooth_loss, compute_smooth_loss
 from loss_functions import compute_depth_errors, compute_pose_errors
 from inverse_warp import pose_vec2mat
@@ -92,6 +93,36 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 
 def main():
+    def make_param_file(args,save_path):
+        
+        args_dict = vars(args)
+        data_folder_name = str(Path(args_dict['data']).normpath().name)
+        folder_string = []
+        folder_string.append('{} epochs'.format(args_dict['epochs']))
+        keys_with_prefix = OrderedDict()
+        keys_with_prefix['epoch_size'] = 'epoch_size '
+        keys_with_prefix['sequence_length'] = 'sequence_length '
+        keys_with_prefix['rotation_mode'] = 'rot'
+        keys_with_prefix['padding_mode'] = 'padding '
+        keys_with_prefix['batch_size'] = 'batch_size '
+        keys_with_prefix['lr'] = 'lr '
+        keys_with_prefix['photo_loss_weight'] = 'photo_loss_weight '
+        keys_with_prefix['mask_loss_weight'] = 'mask_loss_weight '
+        keys_with_prefix['smooth_loss_weight'] = 'smooth_loss_weight '
+        keys_with_prefix['use_edge_smooth'] = 'use_edge_smooth '
+        keys_with_prefix['width'] = 'width '
+        keys_with_prefix['height'] = 'height '
+        keys_with_prefix['with_gt'] = 'with_gt '
+
+
+        for key, prefix in keys_with_prefix.items():
+            value = args_dict[key]
+            folder_string.append('{}{}'.format(prefix, value))
+
+        params = '\n'.join(folder_string)
+        with open(save_path/'params.txt', 'w') as f:
+            f.write(params)
+
     global best_error, n_iter, device
     args = parser.parse_args()
     if args.dataset_format == 'stacked':
@@ -100,8 +131,15 @@ def main():
         from datasets.sequence_folders import SequenceFolder
     save_path = save_path_formatter(args, parser)
     args.save_path = 'checkpoints'/save_path
+    if os.path.isdir(args.save_path):
+        print("dir already exist (probably bash mode), want to override?")
+        input1 = input("press enter to override, any other key to cancel")
+        if str(input1)!="":
+            exit()
     print('=> will save everything to {}'.format(args.save_path))
+    
     args.save_path.makedirs_p()
+    make_param_file(args,args.save_path)
     torch.manual_seed(args.seed)
     if args.evaluate:
         args.epochs = 0
