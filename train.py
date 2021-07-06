@@ -641,16 +641,17 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
 
         ref_imgs = [img.to(device) for img in ref_imgs]
 
-        if args.image_number_depth==1:
-             output_disp = disp_net(tgt_img)
-        elif args.image_number_depth==2:          
-             half = args.sequence_length//2
-             depth_input = torch.cat((ref_imgs[half],tgt_img),1)
-             output_disp = disp_net(depth_input)
-        else:
-             half = args.sequence_length//2
-             depth_input = torch.cat((*ref_imgs[0:half],tgt_img),1)
-             output_disp = disp_net(depth_input)
+        disparities=[]
+
+        for ref in ref_imgs[:len(ref_imgs)//2]:
+            depth_input = torch.cat((ref,tgt_img),1)
+            disparities.append(disp_net(depth_input))
+        
+
+        output_disp = torch.mean(torch.stack(disparities),dim=0)
+        disp_certainty = torch.var(torch.stack(disparities),dim=0)
+             
+      
         output_depth = 1/output_disp[:, 0]
 
         if log_outputs and i in batches_to_log:

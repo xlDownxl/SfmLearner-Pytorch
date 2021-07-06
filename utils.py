@@ -11,7 +11,11 @@ import os
 
 def save_path_formatter(args, parser):
     job_id = os.getenv('SLURM_JOB_ID')
+    if job_id==None:
+        job_id= datetime.datetime.now().strftime("%m-%d-%H:%M")
     job_name = os.getenv('SLURM_JOB_NAME')
+    if job_name==None:
+        job_name="local"
     commit = Path(os.popen("git log --pretty=format:'%h' -n 1").read())
 
     args_dict = vars(args)
