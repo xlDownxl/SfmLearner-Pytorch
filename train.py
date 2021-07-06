@@ -117,6 +117,7 @@ def main():
         keys_with_prefix['width'] = 'width '
         keys_with_prefix['height'] = 'height '
         keys_with_prefix['with_gt'] = 'with_gt '
+        keys_with_prefix['image_number_depth'] = 'image number depth '
         
         for key, prefix in keys_with_prefix.items():
             value = args_dict[key]
