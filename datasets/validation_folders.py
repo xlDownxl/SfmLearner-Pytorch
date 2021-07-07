@@ -124,7 +124,7 @@ class CustomValidationSet(data.Dataset):
             ref_imgs = imgs[1:]
         else:
             intrinsics = np.copy(sample['intrinsics'])
-        return tgt_img, ref_imgs, tgt_depth
+        return tgt_img, ref_imgs, tgt_depth, intrinsics
 
     def __len__(self):
         return len(self.samples)
