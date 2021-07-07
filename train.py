@@ -83,7 +83,9 @@ parser.add_argument('--use-edge-smooth', type=int,
                     help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
                          'if 0, will not output',
                     metavar='N', default=0)                  
-
+parser.add_argument('--with-ssim', type=int,
+                    help='number of images feed into depthnet',
+                    metavar='N',default=1)
 parser.add_argument('--height', type=int,
                     help='number of images feed into depthnet',
                     metavar='N',)
@@ -116,6 +118,7 @@ def main():
         keys_with_prefix['width'] = 'width '
         keys_with_prefix['height'] = 'height '
         keys_with_prefix['with_gt'] = 'with_gt '
+        keys_with_prefix['with_ssim'] = 'with_ssim '
         
         for key, prefix in keys_with_prefix.items():
             value = args_dict[key]
@@ -384,7 +387,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
                                                                depth, explainability_mask, poses,
-                                                               args.rotation_mode, args.padding_mode)
+                                                               args.rotation_mode, args.padding_mode, args.with_ssim)
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask)
         else:
@@ -480,7 +483,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs,
                                                                intrinsics, depth,
                                                                explainability_mask, poses,
-                                                               args.rotation_mode, args.padding_mode)
+                                                               args.rotation_mode, args.padding_mode, args.with_ssim)
         loss_1 = loss_1.item()
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask).item()
