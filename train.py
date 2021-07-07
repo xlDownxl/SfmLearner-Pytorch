@@ -444,7 +444,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
     # Output the logs throughout the whole dataset
     batches_to_log = list(np.linspace(0, len(val_loader), sample_nb_to_log).astype(int))
     w1, w2, w3 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight
-    log_poses = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
+    #log_poses = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
     disp_values = np.zeros(((len(val_loader)-1) * args.batch_size * 3))
 
     # switch to evaluate mode
@@ -503,7 +503,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
 
         if log_outputs and i < len(val_loader)-1:
             step = args.batch_size*(args.sequence_length-1)
-            log_poses[i * step:(i+1) * step] = poses.cpu().view(-1, 6).numpy()
+            #log_poses[i * step:(i+1) * step] = poses.cpu().view(-1, 6).numpy()
             step = args.batch_size * 3
             disp_unraveled = disp.cpu().view(args.batch_size, -1)
             disp_values[i * step:(i+1) * step] = torch.cat([disp_unraveled.min(-1)[0],
