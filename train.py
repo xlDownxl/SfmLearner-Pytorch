@@ -359,7 +359,6 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         explainability_mask, poses = pose_exp_net(tgt_img, ref_imgs)
         pose_matrices = pose_vec2mat_new(poses, args.rotation_mode) 
         
-
         refs_compensated =[]
         for i in range(len(ref_imgs)):
             ref = ref_imgs[i]
@@ -368,7 +367,6 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
             ref_compensated = inverse_rotate(ref, inv_pose, intrinsics)
             refs_compensated.append(ref_compensated)
         
-
         disparities=[]
         for ref in refs_compensated:
             depth_input = torch.cat((ref,tgt_img),1)
@@ -376,16 +374,14 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         avg_disparities=[]
         
         for size in range(len(disparities[0])):
-            a=disparities[0][size]
-            b=disparities[1][size]
-            c=disparities[2][size]
-            d=disparities[3][size]
-            avg = torch.mean(torch.stack((a,b,c,d)),dim=0)
+            sized_images = []
+            for i in range(args.sequence_length-1):
+                sized_images.append(disparities[i][size])
+            avg = torch.mean(torch.stack(sized_images),dim=0)
             avg_disparities.append(avg)    
         disparities=avg_disparities
         depth = [1/disp for disp in disparities]
         
-
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
                                                                depth, explainability_mask, poses,
                                                                args.rotation_mode, args.padding_mode)
