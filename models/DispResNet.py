@@ -47,7 +47,7 @@ def upsample(x):
     return F.interpolate(x, scale_factor=2, mode="nearest")
 
 class DepthDecoder(nn.Module):
-    def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True):
+    def __init__(self, num_ch_enc, scales=range(4), num_output_channels=2, use_skips=True):
         super(DepthDecoder, self).__init__()
 
         self.alpha = 10
@@ -83,7 +83,8 @@ class DepthDecoder(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, input_features):
-        self.outputs = []
+        self.tgt_outputs = []
+        self.ref_outputs = []
 
         # decoder
         x = input_features[-1]
@@ -95,10 +96,14 @@ class DepthDecoder(nn.Module):
             x = torch.cat(x, 1)
             x = self.convs[("upconv", i, 1)](x)
             if i in self.scales:
-                self.outputs.append(self.alpha * self.sigmoid(self.convs[("dispconv", i)](x)) + self.beta)
+                a = self.alpha * self.sigmoid(self.convs[("dispconv", i)](x)) + self.beta
+                self.tgt_outputs.append(a[:,0:1,:,:])
+                self.ref_outputs.append(a[:,1:2,:,:])
 
-        self.outputs = self.outputs[::-1]
-        return self.outputs
+
+        self.tgt_outputs = self.tgt_outputs[::-1]
+        self.ref_outputs = self.ref_outputs[::-1]
+        return self.tgt_outputs, self.ref_outputs 
 
 
 class DispResNet(nn.Module):
@@ -118,7 +123,7 @@ class DispResNet(nn.Module):
         if self.training:
             return outputs
         else:
-            return outputs[0]
+            return [outputs[0][0],outputs[1][0]] #only output the full resolution depth map
 
 
 if __name__ == "__main__":

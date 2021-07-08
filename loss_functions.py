@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-from inverse_warp import inverse_warp
+from inverse_warp import inverse_warp, inverse_warp2
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -44,61 +44,91 @@ class SSIM(nn.Module):
 
 compute_ssim_loss = SSIM().to(device)
 
-def photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
-                                    depth, explainability_mask, pose,
-                                    rotation_mode='euler', padding_mode='zeros', with_ssim=True):
-    def one_scale(depth, explainability_mask):
-        assert(explainability_mask is None or depth.size()[2:] == explainability_mask.size()[2:])
-        assert(pose.size(1) == len(ref_imgs))
+def compute_photo_and_geometry_loss(tgt_img, ref_imgs, intrinsics, tgt_depth, ref_depths, poses, max_scales, with_ssim, with_mask, with_auto_mask, padding_mode):
 
-        reconstruction_loss = 0
-        b, _, h, w = depth.size()
-        downscale = tgt_img.size(2)/h
+    photo_loss = 0
+    geometry_loss = 0
+    masks=[]
+    automasks=[]
+    warped_imgs=[]
+    poses=poses.view(poses.size(1),-1,6) #changering from [B, #ref_img, 6] to [#ref_img, B, 6]
 
-        tgt_img_scaled = F.interpolate(tgt_img, (h, w), mode='area')
-        ref_imgs_scaled = [F.interpolate(ref_img, (h, w), mode='area') for ref_img in ref_imgs]
-        intrinsics_scaled = torch.cat((intrinsics[:, 0:2]/downscale, intrinsics[:, 2:]), dim=1)
+    num_scales = min(len(tgt_depth), max_scales)
+    for ref_img, ref_depth, pose in zip(ref_imgs, ref_depths, poses):
+        for s in range(num_scales):
 
-        warped_imgs = []
-        diff_maps = []
+            # # downsample img
+            # b, _, h, w = tgt_depth[s].size()
+            # downscale = tgt_img.size(2)/h
+            # if s == 0:
+            #     tgt_img_scaled = tgt_img
+            #     ref_img_scaled = ref_img
+            # else:
+            #     tgt_img_scaled = F.interpolate(tgt_img, (h, w), mode='area')
+            #     ref_img_scaled = F.interpolate(ref_img, (h, w), mode='area')
+            # intrinsic_scaled = torch.cat((intrinsics[:, 0:2]/downscale, intrinsics[:, 2:]), dim=1)
+            # tgt_depth_scaled = tgt_depth[s]
+            # ref_depth_scaled = ref_depth[s]
 
-        for i, ref_img in enumerate(ref_imgs_scaled):
-            current_pose = pose[:, i]
+            b, _, h, w = tgt_img.size()
+            tgt_img_scaled = tgt_img
+            ref_img_scaled = ref_img
+            intrinsic_scaled = intrinsics
+            if s == 0:
+                tgt_depth_scaled = tgt_depth[s]
 
-            ref_img_warped, valid_points = inverse_warp(ref_img, depth[:,0], current_pose,
-                                                        intrinsics_scaled,
-                                                        rotation_mode, padding_mode)
-            diff = (tgt_img_scaled - ref_img_warped) * valid_points.unsqueeze(1).float()
+                ref_depth_scaled = ref_depth[s]
+            else:
+                tgt_depth_scaled = F.interpolate(tgt_depth[s], (h, w), mode='nearest')
+                ref_depth_scaled = F.interpolate(ref_depth[s], (h, w), mode='nearest')
 
-            if with_ssim == True:
-                ssim_map = compute_ssim_loss(tgt_img_scaled, ref_img_warped)
-                diff_img = (0.15 * diff + 0.85 * ssim_map)
+            photo_loss1, geometry_loss1,  warped_img, automask = compute_pairwise_loss(tgt_img_scaled, ref_img_scaled, tgt_depth_scaled, ref_depth_scaled, pose,
+                                                                intrinsic_scaled, with_ssim, with_mask, with_auto_mask, padding_mode)
+            #masks.append(mask)
+            automasks.append(automask)
+            warped_imgs.append(warped_img)
 
-            if explainability_mask is not None:
-                diff = diff * explainability_mask[:,i:i+1].expand_as(diff)
+            photo_loss += photo_loss1 
+            geometry_loss += geometry_loss1
 
-            reconstruction_loss += diff.abs().mean()
-            assert((reconstruction_loss == reconstruction_loss).item() == 1)
+    return photo_loss, geometry_loss,  warped_imgs, automasks
 
-            warped_imgs.append(ref_img_warped[0])
-            diff_maps.append(diff[0])
 
-        return reconstruction_loss, warped_imgs, diff_maps
+def compute_pairwise_loss(tgt_img, ref_img, tgt_depth, ref_depth, pose,  intrinsic, with_ssim, with_mask, with_auto_mask, padding_mode):
 
-    warped_results, diff_results = [], []
-    if type(explainability_mask) not in [tuple, list]:
-        explainability_mask = [explainability_mask]
-    if type(depth) not in [list, tuple]:
-        depth = [depth]
+    ref_img_warped, valid_mask, projected_depth, computed_depth = inverse_warp2(ref_img, tgt_depth, ref_depth, pose, intrinsic, padding_mode)
 
-    total_loss = 0
-    for d, mask in zip(depth, explainability_mask):
-        loss, warped, diff = one_scale(d, mask)
-        total_loss += loss
-        warped_results.append(warped)
-        diff_results.append(diff)
-    return total_loss, warped_results, diff_results
+    diff_img = (tgt_img - ref_img_warped).abs().clamp(0, 1)
 
+
+    diff_depth = ((computed_depth - projected_depth).abs() / (computed_depth + projected_depth)).clamp(0, 1)
+
+    if with_auto_mask == True:
+        auto_mask = (diff_img.mean(dim=1, keepdim=True) < (tgt_img - ref_img).abs().mean(dim=1, keepdim=True)).float() * valid_mask
+        valid_mask = auto_mask
+
+    if with_ssim == True:
+        ssim_map = compute_ssim_loss(tgt_img, ref_img_warped)
+        diff_img = (0.15 * diff_img + 0.85 * ssim_map)
+
+    if with_mask == True:
+        weight_mask = (1 - diff_depth)
+        diff_img = diff_img * weight_mask
+
+    # compute all loss
+    reconstruction_loss = mean_on_mask(diff_img, valid_mask)
+    geometry_consistency_loss = mean_on_mask(diff_depth, valid_mask)
+
+    return reconstruction_loss, geometry_consistency_loss, ref_img_warped, valid_mask
+
+# compute mean value given a binary mask
+def mean_on_mask(diff, valid_mask):
+    mask = valid_mask.expand_as(diff)
+    if mask.sum() > 10000:
+        mean_value = (diff * mask).sum() / mask.sum()
+    else:
+        mean_value = torch.tensor(0).float().to(device)
+    return mean_value
 
 def explainability_loss(mask):
     if type(mask) not in [tuple, list]:

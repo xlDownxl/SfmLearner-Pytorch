@@ -55,27 +55,27 @@ COLORMAPS = {'rainbow': opencv_rainbow(),
              'bone': cm.get_cmap('bone', 10000)}
 
 
-def log_output_tensorboard(writer, prefix, index, suffix, n_iter, depth, disp, warped, diff, mask, disparities, uncertainties):
+def log_output_tensorboard(writer, prefix, index, suffix, n_iter, depth, disp, warped,  mask, disparities, uncertainties):
     disp_to_show = tensor2array(disp[0], max_value=None, colormap='magma')
     depth_to_show = tensor2array(depth[0], max_value=None)
     writer.add_image('{} Dispnet Averaged {}/{}'.format(prefix, suffix, index), disp_to_show, n_iter)
     writer.add_image('{} Depth Averaged {}/{}'.format(prefix, suffix, index), depth_to_show, n_iter)
     # log warped images along with explainability mask
 
-    for j, (disp, uncertainty) in enumerate(zip(disparities, uncertainties)): 
+    unvertainty_to_show = tensor2array(uncertainties[0], max_value=None, colormap='magma')
+    writer.add_image('{} Disp Uncertainty {}/{}'.format(prefix, suffix, index), unvertainty_to_show, n_iter)
+    
+    for j, disp in enumerate(disparities): 
         disp_to_show = tensor2array(disp[0], max_value=None, colormap='magma')
         writer.add_image('{} Dispnet Output Nr {} {}/{}'.format(prefix, j,suffix, index), disp_to_show, n_iter)
-        unvertainty_to_show = tensor2array(uncertainty[0], max_value=None, colormap='magma')
-        writer.add_image('{} Uncertainty Output Nr {} {}/{}'.format(prefix, j,suffix, index), unvertainty_to_show, n_iter)
+        
 
-    if (warped is None) or (diff is None):
+    if (warped is None) :
         return
-    for j, (warped_j, diff_j) in enumerate(zip(warped, diff)):
+    for j, warped_j  in enumerate(warped):
         whole_suffix = '{} {}/{}'.format(suffix, j, index)
-        warped_to_show = tensor2array(warped_j)
-        diff_to_show = tensor2array(0.5*diff_j)
-        writer.add_image('{} Warped Outputs {}'.format(prefix, whole_suffix), warped_to_show, n_iter)
-        writer.add_image('{} Diff Outputs {}'.format(prefix, whole_suffix), diff_to_show, n_iter)
+        warped_to_show = tensor2array(warped_j)       
+        writer.add_image('{} Warped Outputs {}'.format(prefix, whole_suffix), warped_to_show, n_iter)  
         if mask is not None:
             mask_to_show = tensor2array(mask[0, j], max_value=1, colormap='bone')
             writer.add_image('{} Exp mask Outputs {}'.format(prefix, whole_suffix), mask_to_show, n_iter)

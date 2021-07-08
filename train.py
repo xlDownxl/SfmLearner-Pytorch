@@ -12,7 +12,7 @@ import custom_transforms
 import models
 from utils import tensor2array, save_checkpoint, save_path_formatter, log_output_tensorboard
 from path import Path
-from loss_functions import photometric_reconstruction_loss, explainability_loss, smooth_loss, compute_smooth_loss
+from loss_functions import  explainability_loss, smooth_loss, compute_smooth_loss, compute_photo_and_geometry_loss
 from loss_functions import compute_depth_errors, compute_pose_errors
 from inverse_warp import pose_vec2mat, inverse_rotate, pose_vec2mat_new
 from logger import TermLogger, AverageMeter
@@ -74,7 +74,11 @@ parser.add_argument('--log-full', default='progress_log_full.csv', metavar='PATH
 parser.add_argument('-p', '--photo-loss-weight', type=float, help='weight for photometric loss', metavar='W', default=1)
 parser.add_argument('-m', '--mask-loss-weight', type=float, help='weight for explainabilty mask loss', metavar='W', default=0)
 parser.add_argument('-s', '--smooth-loss-weight', type=float, help='weight for disparity smoothness loss', metavar='W', default=0.1)
+parser.add_argument('-c', '--geometry-consistency-weight', type=float, help='weight for depth consistency loss', metavar='W', default=0.1)
 parser.add_argument('--log-output', action='store_true', help='will log dispnet outputs and warped imgs at validation step')
+parser.add_argument('--val_left_imgs',type=int,
+                    help='use all left images from the target image during validation, by default enabled',
+                    metavar='N',default=1)
 parser.add_argument('-f', '--training-output-freq', type=int,
                     help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
                          'if 0, will not output',
@@ -119,6 +123,7 @@ def main():
         keys_with_prefix['height'] = 'height '
         keys_with_prefix['with_gt'] = 'with_gt '
         keys_with_prefix['with_ssim'] = 'with_ssim '
+        keys_with_prefix['geometry_consistency_weight'] = 'geometry-consistency-weight '
         
         for key, prefix in keys_with_prefix.items():
             value = args_dict[key]
@@ -340,7 +345,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter(precision=4)
-    w1, w2, w3 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight
+    w1, w2, w3, w4 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight, args.geometry_consistency_weight
 
     # switch to train mode
     disp_net.train()
@@ -363,38 +368,51 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         pose_matrices = pose_vec2mat_new(poses, args.rotation_mode) 
         
         refs_compensated =[]
-        for i in range(len(ref_imgs)):
-            ref = ref_imgs[i]
-            pose = pose_matrices[:,i]
+        for k in range(len(ref_imgs)):
+            ref = ref_imgs[k]
+            pose = pose_matrices[:,k]
             inv_pose= pose[:,:,:-1].inverse()
             ref_compensated = inverse_rotate(ref, inv_pose, intrinsics)
             refs_compensated.append(ref_compensated)
         
-        disparities=[]
+        tgt_disparities=[]
+        ref_disparities=[]
         for ref in refs_compensated:
             depth_input = torch.cat((ref,tgt_img),1)
-            disparities.append(disp_net(depth_input))
-        avg_disparities=[]
+            depth_output =disp_net(depth_input)
+            tgt_disparities.append(depth_output[1])
+            ref_disparities.append(depth_output[0])
         
-        for size in range(len(disparities[0])):
+        avg_disparities=[]        
+        for size in range(len(tgt_disparities[0])):
             sized_images = []
             for i in range(args.sequence_length-1):
-                sized_images.append(disparities[i][size])
+                sized_images.append(tgt_disparities[i][size])
             avg = torch.mean(torch.stack(sized_images),dim=0)
             avg_disparities.append(avg)    
-        disparities=avg_disparities
-        depth = [1/disp for disp in disparities]
+        tgt_disparities=avg_disparities
+
+        tgt_depth = [1/disp for disp in tgt_disparities]
+        ref_depths=[]
+        for o in range(len(ref_disparities)):
+            ref_depths.append([1/disp for disp in ref_disparities[o]])
+
         
-        loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
-                                                               depth, explainability_mask, poses,
-                                                               args.rotation_mode, args.padding_mode, args.with_ssim)
+        loss_1, loss_4, warped, _ = compute_photo_and_geometry_loss(tgt_img, ref_imgs, intrinsics, tgt_depth, ref_depths,
+                                                         poses, 4, args.with_ssim,
+                                                         False, False, args.padding_mode)
+        
+        
+        #compute_photo_and_geometry_loss(tgt_img, ref_imgs, intrinsics,
+             #                                                  tgt_depth, ref_depths, explainability_mask, poses,
+              #                                                 args.rotation_mode, args.padding_mode, args.with_ssim)
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask)
         else:
             loss_2 = 0
-        loss_3 = compute_smooth_loss(depth,tgt_img,args.use_edge_smooth)
+        loss_3 = compute_smooth_loss(tgt_depth,tgt_img,args.use_edge_smooth)
 
-        loss = w1*loss_1 + w2*loss_2 + w3*loss_3
+        loss = w1*loss_1 + w2*loss_2 + w3*loss_3 + w4*loss_4
 
         if log_losses:
             tb_writer.add_scalar('photometric_error', loss_1.item(), n_iter)
@@ -405,7 +423,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
 
         if log_output:
             tb_writer.add_image('train Input', tensor2array(tgt_img[0]), n_iter)
-            for k, scaled_maps in enumerate(zip(depth, disparities, warped, diff, explainability_mask)):
+            for k, scaled_maps in enumerate(zip(tgt_depth, tgt_disparities, warped,  explainability_mask)):
                 log_output_tensorboard(tb_writer, "train", 0, " {}".format(k), n_iter, *scaled_maps)
 
         # record loss and EPE
@@ -442,7 +460,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
     batches_to_log = list(np.linspace(0, len(val_loader), sample_nb_to_log).astype(int))
-    w1, w2, w3 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight
+    w1, w2, w3, w4 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight, args.geometry_consistency_weight
     #log_poses = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
     disp_values = np.zeros(((len(val_loader)-1) * args.batch_size * 3))
 
@@ -462,34 +480,43 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         pose_matrices = pose_vec2mat_new(poses, args.rotation_mode) 
         
         refs_compensated =[]
-        for i in range(len(ref_imgs)):
-            ref = ref_imgs[i]
-            pose = pose_matrices[:,i]
+        if args.val_left_imgs:
+            nr_val_input_imgs = len(ref_imgs)//2
+        else:
+            nr_val_input_imgs = len(ref_imgs)
+        for k in range(nr_val_input_imgs):
+            ref = ref_imgs[k]
+            pose = pose_matrices[:,k]
             inv_pose= pose[:,:,:-1].inverse()
             ref_compensated = inverse_rotate(ref, inv_pose, intrinsics)
             refs_compensated.append(ref_compensated)
-
-        disparities=[]
-        for ref in refs_compensated:
+        
+        tgt_disparities=[]
+        ref_disparities=[]
+        for ref in refs_compensated:  ##put only the left to the average target image depth
             depth_input = torch.cat((ref,tgt_img),1)
-            disparities.append(disp_net(depth_input))
-        
+            depth_output =disp_net(depth_input)
+            tgt_disparities.append(depth_output[1])
+            ref_disparities.append(depth_output[0])
 
-        disp = torch.mean(torch.stack(disparities),dim=0)
-        disp_uncertainty = torch.var(torch.stack(disparities),dim=0)
-             
-        depth = 1/disp
+        disp = torch.mean(torch.stack(tgt_disparities),dim=0)
+        disp_uncertainty = torch.var(torch.stack(tgt_disparities),dim=0)       
+
+        tgt_depth = 1/disp 
+
+        ref_depths=[]
+        for o in range(len(ref_disparities)):
+            ref_depths.append([1/ref_disparities[o]])
         
-        loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs,
-                                                               intrinsics, depth,
-                                                               explainability_mask, poses,
-                                                               args.rotation_mode, args.padding_mode, args.with_ssim)
+        loss_1, loss_4, warped, automasks = compute_photo_and_geometry_loss(tgt_img, ref_imgs, intrinsics, [tgt_depth], ref_depths,
+                                                         poses, 1, args.with_ssim,
+                                                         False, False, args.padding_mode)
         loss_1 = loss_1.item()
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask).item()
         else:
             loss_2 = 0
-        loss_3 = compute_smooth_loss([depth],tgt_img,args.use_edge_smooth).item()
+        loss_3 = compute_smooth_loss([tgt_depth],tgt_img,args.use_edge_smooth).item()
 
         if log_outputs and i in batches_to_log:  # log first output of wanted batches
             index = batches_to_log.index(i)
@@ -497,8 +524,8 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
                 for j, ref in enumerate(ref_imgs):
                     tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(tgt_img[0]), 0)
                     tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(ref[0]), 1)
-
-            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0], diff[0], explainability_mask, disparities, disp_uncertainty)
+            
+            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0],  explainability_mask, tgt_disparities, disp_uncertainty)
 
         if log_outputs and i < len(val_loader)-1:
             step = args.batch_size*(args.sequence_length-1)
@@ -508,8 +535,8 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
             disp_values[i * step:(i+1) * step] = torch.cat([disp_unraveled.min(-1)[0],
                                                             disp_unraveled.median(-1)[0],
                                                             disp_unraveled.max(-1)[0]]).numpy()
-
-        loss = w1*loss_1 + w2*loss_2 + w3*loss_3
+        
+        loss = w1*loss_1 + w2*loss_2 + w3*loss_3 + w4*loss_4
         losses.update([loss, loss_1, loss_2])
 
         # measure elapsed time
