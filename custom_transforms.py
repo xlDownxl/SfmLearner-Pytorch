@@ -3,7 +3,7 @@ import torch
 import random
 import numpy as np
 from skimage.transform import resize
-
+import cv2
 '''Set of tranform random routines that takes list of inputs as arguments,
 in order to have random but coherent transformations.'''
 
@@ -52,12 +52,36 @@ class RandomHorizontalFlip(object):
             output_intrinsics = np.copy(intrinsics)
             output_images = [np.copy(np.fliplr(im)) for im in images]
             w = output_images[0].shape[1]
-            output_intrinsics[0,2] = w - output_intrinsics[0,2]
+            #print("horizontal")
+            #print(output_intrinsics)
+            output_intrinsics[0,2] = w - output_intrinsics[0,2] #flip focal point of x
+            #print(output_intrinsics)
         else:
             output_images = images
             output_intrinsics = intrinsics
         return output_images, output_intrinsics
 
+class RandomVerticalFlip(object):
+    """Randomly vertically flips the given numpy array with a probability of 0.5"""
+
+    def __call__(self, images, intrinsics, ):
+        assert intrinsics is not None
+        if random.random() < 0.5:
+            output_intrinsics = np.copy(intrinsics)
+        
+            output_images = [np.copy(np.flipud(im)) for im in images]
+            w = output_images[0].shape[0]
+            #print("vertical")
+            #print(output_intrinsics)
+            output_intrinsics[1,2] = w - output_intrinsics[1,2]  #flip focal point of y
+            #print(output_intrinsics)
+            #cv2.imwrite("aug/image_processed"+str(random.random())+".jpg", output_images[0])
+        else:
+            output_images = images
+            output_intrinsics = intrinsics
+            #cv2.imwrite("aug/image_processed_NOT"+str(random.random())+".jpg", output_images[0])
+            
+        return output_images, output_intrinsics
 
 class RandomScaleCrop(object):
     """Randomly zooms images up to 15% and crop them to keep same size as before."""
@@ -82,3 +106,51 @@ class RandomScaleCrop(object):
         output_intrinsics[1,2] -= offset_y
 
         return cropped_images, output_intrinsics
+
+def change_brightness(img, value=30):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    v = cv2.add(v,value)
+    v[v > 255] = 255
+    v[v < 0] = 0
+    final_hsv = cv2.merge((h, s, v))
+    img = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
+    return img
+
+def change_saturation(img, value=30):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype("float32")
+    h, s, v = cv2.split(hsv)
+    s = s*value
+    s[s > 255] = 255
+    s[s < 0] = 0
+    final_hsv = cv2.merge((h, s, v))
+    img = cv2.cvtColor(final_hsv.astype("uint8"), cv2.COLOR_HSV2BGR)
+    return img
+
+class ColorJitter(object):
+    """TODO"""
+
+    def __call__(self, images, intrinsics):
+
+        brightness = random.gauss(0,10)
+        #saturation = random.uniform(-1.5,1.5)
+        #print(brightness)
+        
+        output_images = [change_brightness(img, value=brightness) for img in images]
+        #output_images = [change_saturation(img, value=saturation) for img in images]
+        #cv2.imwrite("aug/image_processed"+str(brightness)+".jpg", output_images[0])
+      
+        return output_images, intrinsics
+
+class RandomGauss(object):
+    """TODO"""
+
+    def __call__(self, images, intrinsics):
+        if random.getrandbits(1)==1:
+            sigma = random.uniform(0,1)       
+            output_images = [cv2.GaussianBlur(img,(5,5),sigma) for img in images]
+            #cv2.imwrite("aug/image_processed"+str(sigma)+".jpg", output_images[0])
+        else:
+            output_images = images
+      
+        return output_images, intrinsics
