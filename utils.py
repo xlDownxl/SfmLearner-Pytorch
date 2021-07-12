@@ -25,7 +25,6 @@ def save_path_formatter(args, parser):
     return data_folder_name/commit/save_path
 
 
-
 def high_res_colormap(low_res_cmap, resolution=1000, max_value=1):
     # Construct the list colormap, with interpolated values for higer resolution
     # For a linear segmented colormap, you can just specify the number of point in

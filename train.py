@@ -21,7 +21,6 @@ import datetime
 from imageio import imread, imsave
 from skimage.transform import resize
 import glob
-
 parser = argparse.ArgumentParser(description='Structure from Motion Learner training on KITTI and CityScapes Dataset',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -97,6 +96,10 @@ parser.add_argument('--width', type=int,
                     help='number of images feed into depthnet',
                     metavar='N',)
 
+parser.add_argument('--minimum-reprojection-error', type=int,
+                    help='put 1 if minimum reprojetion error should be used',
+                    metavar='N',default=0)
+
 best_error = -1
 n_iter = 0
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -138,7 +141,6 @@ def main():
         params = '\n'.join(folder_string)
         with open(save_path/'params.txt', 'w') as f:
             f.write(params)
-
     global best_error, n_iter, device
     args = parser.parse_args()
     if args.dataset_format == 'stacked':
@@ -795,6 +797,50 @@ def validate_with_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb
     #logger.valid_bar.update(len(val_loader))
     return errors.avg, error_names
 
+@torch.no_grad()
+def validate_vslam(args, disp_net, epoch, tb_writer):
+
+    test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
+
+    #print('{} files to test'.format(len(test_files)))
+    
+    #os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
+    #os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
+
+    previous_img = test_files[0]
+    previous_img = imread(previous_img)
+
+    h,w,_ = previous_img.shape
+    if (h != args.height or w != args.width):
+        previous_img = resize(previous_img, (args.height, args.width))
+    previous_img = np.transpose(previous_img, (2, 0, 1))
+
+    previous_img = torch.from_numpy(previous_img.astype(np.float32)).unsqueeze(0)
+    previous_img = ((previous_img - 0.5)/0.5).to(device)
+
+    for i in range(1,len(test_files)):
+        current_img = test_files[i] 
+        current_img = imread(current_img)
+
+        h,w,_ = current_img.shape
+        if (h != args.height or w != args.width):
+            current_img = resize(current_img, (args.height, args.width))
+        current_img = np.transpose(current_img, (2, 0, 1))
+
+        current_img = torch.from_numpy(current_img.astype(np.float32)).unsqueeze(0)
+        current_img = ((current_img - 0.5)/0.5).to(device)
+
+        output = disp_net(torch.cat((previous_img,current_img),1))[0]
+
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(output, max_value=None, colormap='magma'),
+                                epoch)
+        depth = 1/output
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(depth, max_value=None),
+                                epoch)
+        
+        previous_img=current_img
 
 if __name__ == '__main__':
     main()
