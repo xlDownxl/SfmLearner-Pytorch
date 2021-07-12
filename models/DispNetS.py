@@ -48,7 +48,7 @@ class DispNetS(nn.Module):
         self.beta = beta
 
         conv_planes = [32, 64, 128, 256, 512, 512, 512]
-        self.conv1 = downsample_conv(num_imgs*3,              conv_planes[0], kernel_size=7)
+        self.conv1 = downsample_conv(6,              conv_planes[0], kernel_size=7)
         self.conv2 = downsample_conv(conv_planes[0], conv_planes[1], kernel_size=5)
         self.conv3 = downsample_conv(conv_planes[1], conv_planes[2])
         self.conv4 = downsample_conv(conv_planes[2], conv_planes[3])

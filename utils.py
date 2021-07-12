@@ -7,34 +7,22 @@ import datetime
 from collections import OrderedDict
 from matplotlib import cm
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
-
+import os
 
 def save_path_formatter(args, parser):
-    def is_default(key, value):
-        return value == parser.get_default(key)
+    job_id = os.getenv('SLURM_JOB_ID')
+    if job_id==None:
+        job_id= datetime.datetime.now().strftime("%m-%d-%H:%M")
+    job_name = os.getenv('SLURM_JOB_NAME')
+    if job_name==None:
+        job_name="local"
+    commit = Path(os.popen("git log --pretty=format:'%h' -n 1").read())
+
     args_dict = vars(args)
     data_folder_name = str(Path(args_dict['data']).normpath().name)
-    folder_string = [data_folder_name]
-    if not is_default('epochs', args_dict['epochs']):
-        folder_string.append('{}epochs'.format(args_dict['epochs']))
-    keys_with_prefix = OrderedDict()
-    keys_with_prefix['epoch_size'] = 'epoch_size'
-    keys_with_prefix['sequence_length'] = 'seq'
-    keys_with_prefix['rotation_mode'] = 'rot_'
-    keys_with_prefix['padding_mode'] = 'padding_'
-    keys_with_prefix['batch_size'] = 'b'
-    keys_with_prefix['lr'] = 'lr'
-    keys_with_prefix['photo_loss_weight'] = 'p'
-    keys_with_prefix['mask_loss_weight'] = 'm'
-    keys_with_prefix['smooth_loss_weight'] = 's'
 
-    for key, prefix in keys_with_prefix.items():
-        value = args_dict[key]
-        if not is_default(key, value):
-            folder_string.append('{}{}'.format(prefix, value))
-    save_path = Path(','.join(folder_string))
-    timestamp = datetime.datetime.now().strftime("%m-%d-%H:%M")
-    return save_path/timestamp
+    save_path = Path(','.join([job_name,job_id]))
+    return data_folder_name/commit/save_path
 
 
 def high_res_colormap(low_res_cmap, resolution=1000, max_value=1):
@@ -66,20 +54,27 @@ COLORMAPS = {'rainbow': opencv_rainbow(),
              'bone': cm.get_cmap('bone', 10000)}
 
 
-def log_output_tensorboard(writer, prefix, index, suffix, n_iter, depth, disp, warped, diff, mask):
+def log_output_tensorboard(writer, prefix, index, suffix, n_iter, depth, disp, warped,  mask, disparities, uncertainties):
     disp_to_show = tensor2array(disp[0], max_value=None, colormap='magma')
     depth_to_show = tensor2array(depth[0], max_value=None)
-    writer.add_image('{} Dispnet Output Normalized{}/{}'.format(prefix, suffix, index), disp_to_show, n_iter)
-    writer.add_image('{} Depth Output Normalized{}/{}'.format(prefix, suffix, index), depth_to_show, n_iter)
+    writer.add_image('{} Dispnet Averaged {}/{}'.format(prefix, suffix, index), disp_to_show, n_iter)
+    writer.add_image('{} Depth Averaged {}/{}'.format(prefix, suffix, index), depth_to_show, n_iter)
     # log warped images along with explainability mask
-    if (warped is None) or (diff is None):
+
+    unvertainty_to_show = tensor2array(uncertainties[0], max_value=None, colormap='magma')
+    writer.add_image('{} Disp Uncertainty {}/{}'.format(prefix, suffix, index), unvertainty_to_show, n_iter)
+    
+    for j, disp in enumerate(disparities): 
+        disp_to_show = tensor2array(disp[0], max_value=None, colormap='magma')
+        writer.add_image('{} Dispnet Output Nr {} {}/{}'.format(prefix, j,suffix, index), disp_to_show, n_iter)
+        
+
+    if (warped is None) :
         return
-    for j, (warped_j, diff_j) in enumerate(zip(warped, diff)):
+    for j, warped_j  in enumerate(warped):
         whole_suffix = '{} {}/{}'.format(suffix, j, index)
-        warped_to_show = tensor2array(warped_j)
-        diff_to_show = tensor2array(0.5*diff_j)
-        writer.add_image('{} Warped Outputs {}'.format(prefix, whole_suffix), warped_to_show, n_iter)
-        writer.add_image('{} Diff Outputs {}'.format(prefix, whole_suffix), diff_to_show, n_iter)
+        warped_to_show = tensor2array(warped_j)       
+        writer.add_image('{} Warped Outputs {}'.format(prefix, whole_suffix), warped_to_show, n_iter)  
         if mask is not None:
             mask_to_show = tensor2array(mask[0, j], max_value=1, colormap='bone')
             writer.add_image('{} Exp mask Outputs {}'.format(prefix, whole_suffix), mask_to_show, n_iter)

@@ -1,7 +1,8 @@
 import argparse
 import time
 import csv
-
+from collections import OrderedDict
+import os
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -10,13 +11,16 @@ import torch.utils.data
 import custom_transforms
 import models
 from utils import tensor2array, save_checkpoint, save_path_formatter, log_output_tensorboard
-
-from loss_functions import photometric_reconstruction_loss, explainability_loss, smooth_loss
+from path import Path
+from loss_functions import  explainability_loss, smooth_loss, compute_smooth_loss, compute_photo_and_geometry_loss
 from loss_functions import compute_depth_errors, compute_pose_errors
-from inverse_warp import pose_vec2mat
+from inverse_warp import pose_vec2mat, inverse_rotate, pose_vec2mat_new
 from logger import TermLogger, AverageMeter
 from tensorboardX import SummaryWriter
-
+import datetime
+from imageio import imread, imsave
+from skimage.transform import resize
+import glob
 parser = argparse.ArgumentParser(description='Structure from Motion Learner training on KITTI and CityScapes Dataset',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -69,11 +73,32 @@ parser.add_argument('--log-full', default='progress_log_full.csv', metavar='PATH
 parser.add_argument('-p', '--photo-loss-weight', type=float, help='weight for photometric loss', metavar='W', default=1)
 parser.add_argument('-m', '--mask-loss-weight', type=float, help='weight for explainabilty mask loss', metavar='W', default=0)
 parser.add_argument('-s', '--smooth-loss-weight', type=float, help='weight for disparity smoothness loss', metavar='W', default=0.1)
+parser.add_argument('-c', '--geometry-consistency-weight', type=float, help='weight for depth consistency loss', metavar='W', default=0.1)
 parser.add_argument('--log-output', action='store_true', help='will log dispnet outputs and warped imgs at validation step')
+parser.add_argument('--val_left_imgs',type=int,
+                    help='use all left images from the target image during validation, by default enabled',
+                    metavar='N',default=1)
 parser.add_argument('-f', '--training-output-freq', type=int,
                     help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
                          'if 0, will not output',
                     metavar='N', default=0)
+parser.add_argument('--use-edge-smooth', type=int,
+                    help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
+                         'if 0, will not output',
+                    metavar='N', default=0)                  
+parser.add_argument('--with-ssim', type=int,
+                    help='number of images feed into depthnet',
+                    metavar='N',default=1)
+parser.add_argument('--height', type=int,
+                    help='number of images feed into depthnet',
+                    metavar='N',)
+parser.add_argument('--width', type=int,
+                    help='number of images feed into depthnet',
+                    metavar='N',)
+
+parser.add_argument('--minimum-reprojection-error', type=int,
+                    help='put 1 if minimum reprojetion error should be used',
+                    metavar='N',default=0)
 
 best_error = -1
 n_iter = 0
@@ -81,6 +106,41 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 
 def main():
+    def make_param_file(args,save_path):    
+        args_dict = vars(args)
+        data_folder_name = str(Path(args_dict['data']).normpath().name)
+        folder_string = []
+        folder_string.append('{} epochs'.format(args_dict['epochs']))
+        keys_with_prefix = OrderedDict()
+        keys_with_prefix['epoch_size'] = 'epoch_size '
+        keys_with_prefix['sequence_length'] = 'sequence_length '
+        keys_with_prefix['rotation_mode'] = 'rot'
+        keys_with_prefix['padding_mode'] = 'padding '
+        keys_with_prefix['batch_size'] = 'batch_size '
+        keys_with_prefix['lr'] = 'lr '
+        keys_with_prefix['photo_loss_weight'] = 'photo_loss_weight '
+        keys_with_prefix['mask_loss_weight'] = 'mask_loss_weight '
+        keys_with_prefix['smooth_loss_weight'] = 'smooth_loss_weight '
+        keys_with_prefix['use_edge_smooth'] = 'use_edge_smooth '
+        keys_with_prefix['width'] = 'width '
+        keys_with_prefix['height'] = 'height '
+        keys_with_prefix['with_gt'] = 'with_gt '
+        keys_with_prefix['with_ssim'] = 'with_ssim '
+        keys_with_prefix['geometry_consistency_weight'] = 'geometry-consistency-weight '
+        
+        for key, prefix in keys_with_prefix.items():
+            value = args_dict[key]
+            folder_string.append('{}{}'.format(prefix, value))
+
+        timestamp = datetime.datetime.now().strftime("%m-%d-%H:%M")
+        folder_string.append('timestamp '+timestamp)
+        commit_id = Path(os.popen("git log --pretty=format:'%h' -n 1").read())
+        folder_string.append('Git Commit ID '+commit_id)
+        commit_message = Path(os.popen("git log -1").read())
+        folder_string.append('Git Message '+commit_message)
+        params = '\n'.join(folder_string)
+        with open(save_path/'params.txt', 'w') as f:
+            f.write(params)
     global best_error, n_iter, device
     args = parser.parse_args()
     if args.dataset_format == 'stacked':
@@ -89,8 +149,15 @@ def main():
         from datasets.sequence_folders import SequenceFolder
     save_path = save_path_formatter(args, parser)
     args.save_path = 'checkpoints'/save_path
+    if os.path.isdir(args.save_path):
+        print("dir already exist (probably bash mode), want to override?")
+        input1 = input("press enter to override, any other key to cancel")
+        if str(input1)!="":
+            exit()
     print('=> will save everything to {}'.format(args.save_path))
+    
     args.save_path.makedirs_p()
+    make_param_file(args,args.save_path)
     torch.manual_seed(args.seed)
     if args.evaluate:
         args.epochs = 0
@@ -111,6 +178,8 @@ def main():
     print("=> fetching scenes in '{}'".format(args.data))
     train_set = SequenceFolder(
         args.data,
+        height=args.height,
+        width=args.width,
         transform=train_transform,
         seed=args.seed,
         train=True,
@@ -122,18 +191,25 @@ def main():
         if args.with_pose:
             from datasets.validation_folders import ValidationSetWithPose
             val_set = ValidationSetWithPose(
+                
                 args.data,
                 sequence_length=args.sequence_length,
                 transform=valid_transform)
         else:
-            from datasets.validation_folders import ValidationSet
-            val_set = ValidationSet(
+            from datasets.validation_folders import CustomValidationSet
+            val_set = CustomValidationSet(
                 args.data,
+                height=args.height,
+                width=args.width,
+                seed=args.seed,
+                sequence_length=args.sequence_length,
                 transform=valid_transform
             )
     else:
         val_set = SequenceFolder(
             args.data,
+            height=args.height,
+            width=args.width,
             transform=valid_transform,
             seed=args.seed,
             train=False,
@@ -154,7 +230,7 @@ def main():
     # create model
     print("=> creating model")
 
-    disp_net = models.DispNetS(num_imgs=args.sequence_length).to(device)
+    disp_net = models.DispResNet(num_layers = 18).to(device)
     output_exp = args.mask_loss_weight > 0
     if not output_exp:
         print("=> no mask loss, PoseExpnet will only output pose")
@@ -179,6 +255,10 @@ def main():
     pose_exp_net = torch.nn.DataParallel(pose_exp_net)
 
     print('=> setting adam solver')
+    if args.use_edge_smooth:
+        print('=> using edge aware smooth loss')
+    else:
+        print('=> using basic smooth loss')
 
     optim_params = [
         {'params': disp_net.parameters(), 'lr': args.lr},
@@ -202,9 +282,9 @@ def main():
     if args.pretrained_disp or args.evaluate:
         #logger.reset_valid_bar()
         if args.with_gt and args.with_pose:
-            errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, 0, logger, tb_writer)
+            errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, pose_exp_net, 0, logger, tb_writer)
         elif args.with_gt:
-            errors, error_names = validate_with_gt(args, val_loader, disp_net, 0, logger, tb_writer)
+            errors, error_names = validate_with_gt(args, val_loader, disp_net, pose_exp_net, 0, logger, tb_writer)
         else:
             errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, 0, logger, tb_writer)
         for error, name in zip(errors, error_names):
@@ -213,6 +293,7 @@ def main():
         #logger.valid_writer.write(' * Avg {}'.format(error_string))
 
     for epoch in range(args.epochs):
+        print(epoch)
         #logger.epoch_bar.update(epoch)
 
         # train for one epoch
@@ -225,7 +306,7 @@ def main():
         if args.with_gt and args.with_pose:
             errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer)
         elif args.with_gt:
-            errors, error_names = validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer)
+            errors, error_names = validate_with_gt(args, val_loader, disp_net,pose_exp_net, epoch, logger, tb_writer)
         else:
             errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer)
         error_string = ', '.join('{} : {:.3f}'.format(name, error) for name, error in zip(error_names, errors))
@@ -234,6 +315,9 @@ def main():
         for error, name in zip(errors, error_names):
             tb_writer.add_scalar(name, error, epoch)
 
+        if "crane" in args.data:
+            if epoch %3==0:
+                validate_vslam(args,  disp_net, epoch, tb_writer)
         # Up to you to chose the most relevant error to measure your model's performance, careful some measures are to maximize (such as a1,a2,a3)
         decisive_error = errors[1]
         if best_error < 0:
@@ -263,7 +347,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter(precision=4)
-    w1, w2, w3 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight
+    w1, w2, w3, w4 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight, args.geometry_consistency_weight
 
     # switch to train mode
     disp_net.train()
@@ -282,32 +366,55 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         ref_imgs = [img.to(device) for img in ref_imgs]
         intrinsics = intrinsics.to(device)
 
-        explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
+        explainability_mask, poses = pose_exp_net(tgt_img, ref_imgs)
+        pose_matrices = pose_vec2mat_new(poses, args.rotation_mode) 
+        
+        refs_compensated =[]
+        for k in range(len(ref_imgs)):
+            ref = ref_imgs[k]
+            pose = pose_matrices[:,k]
+            inv_pose= pose[:,:,:-1].inverse()
+            ref_compensated = inverse_rotate(ref, inv_pose, intrinsics)
+            refs_compensated.append(ref_compensated)
+        
+        tgt_disparities=[]
+        ref_disparities=[]
+        for ref in refs_compensated:
+            depth_input = torch.cat((ref,tgt_img),1)
+            depth_output =disp_net(depth_input)
+            tgt_disparities.append(depth_output[1])
+            ref_disparities.append(depth_output[0])
+        
+        avg_disparities=[]        
+        for size in range(len(tgt_disparities[0])):
+            sized_images = []
+            for i in range(args.sequence_length-1):
+                sized_images.append(tgt_disparities[i][size])
+            avg = torch.mean(torch.stack(sized_images),dim=0)
+            avg_disparities.append(avg)    
+        tgt_disparities=avg_disparities
 
-        # compute output
-        half = args.sequence_length//2
-        #print(half)
+        tgt_depth = [1/disp for disp in tgt_disparities]
+        ref_depths=[]
+        for o in range(len(ref_disparities)):
+            ref_depths.append([1/disp for disp in ref_disparities[o]])
 
-        depth_input = torch.cat((*ref_imgs[0:half],tgt_img,*ref_imgs[half:args.sequence_length]),1)
-        #print(depth_input.shape)
-        #print("____")
-        #pose_shape = [depth_input.shape[0],6]
-        #print(pose_shape)
-        #print(pose.shape)
-        disparities = disp_net(depth_input,pose.view(-1,(args.sequence_length-1)*6))
-        depth = [1/disp for disp in disparities]
-
-
-        loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
-                                                               depth, explainability_mask, pose,
-                                                               args.rotation_mode, args.padding_mode)
+        
+        loss_1, loss_4, warped, _ = compute_photo_and_geometry_loss(tgt_img, ref_imgs, intrinsics, tgt_depth, ref_depths,
+                                                         poses, 4, args.with_ssim,
+                                                         False, False, args.padding_mode)
+        
+        
+        #compute_photo_and_geometry_loss(tgt_img, ref_imgs, intrinsics,
+             #                                                  tgt_depth, ref_depths, explainability_mask, poses,
+              #                                                 args.rotation_mode, args.padding_mode, args.with_ssim)
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask)
         else:
             loss_2 = 0
-        loss_3 = smooth_loss(depth)
+        loss_3 = compute_smooth_loss(tgt_depth,tgt_img,args.use_edge_smooth)
 
-        loss = w1*loss_1 + w2*loss_2 + w3*loss_3
+        loss = w1*loss_1 + w2*loss_2 + w3*loss_3 + w4*loss_4
 
         if log_losses:
             tb_writer.add_scalar('photometric_error', loss_1.item(), n_iter)
@@ -318,7 +425,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
 
         if log_output:
             tb_writer.add_image('train Input', tensor2array(tgt_img[0]), n_iter)
-            for k, scaled_maps in enumerate(zip(depth, disparities, warped, diff, explainability_mask)):
+            for k, scaled_maps in enumerate(zip(tgt_depth, tgt_disparities, warped,  explainability_mask)):
                 log_output_tensorboard(tb_writer, "train", 0, " {}".format(k), n_iter, *scaled_maps)
 
         # record loss and EPE
@@ -338,7 +445,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
             writer.writerow([loss.item(), loss_1.item(), loss_2.item() if w2 > 0 else 0, loss_3.item()])
         #logger.train_bar.update(i+1)
         #if i % args.print_freq == 0:
-        #    logger.train_writer.write('Train: Time {} Data {} Loss {}'.format(batch_time, data_time, losses))
+            #logger.train_writer.write('Train: Time {} Data {} Loss {}'.format(batch_time, data_time, losses))
         if i >= epoch_size - 1:
             break
 
@@ -348,15 +455,15 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
 
 
 @torch.no_grad()
-def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer, sample_nb_to_log=3):
+def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer, sample_nb_to_log=10):
     global device
     batch_time = AverageMeter()
     losses = AverageMeter(i=3, precision=4)
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
     batches_to_log = list(np.linspace(0, len(val_loader), sample_nb_to_log).astype(int))
-    w1, w2, w3 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight
-    poses = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
+    w1, w2, w3, w4 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight, args.geometry_consistency_weight
+    #log_poses = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
     disp_values = np.zeros(((len(val_loader)-1) * args.batch_size * 3))
 
     # switch to evaluate mode
@@ -364,34 +471,54 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
     pose_exp_net.eval()
 
     end = time.time()
-    #.valid_bar.update(0)
+    #logger.valid_bar.update(0)
     for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         ref_imgs = [img.to(device) for img in ref_imgs]
         intrinsics = intrinsics.to(device)
         intrinsics_inv = intrinsics_inv.to(device)
 
-        half = args.sequence_length//2
-        #print(half)
+        explainability_mask, poses = pose_exp_net(tgt_img, ref_imgs)
+        pose_matrices = pose_vec2mat_new(poses, args.rotation_mode) 
+        
+        refs_compensated =[]
+        if args.val_left_imgs:
+            nr_val_input_imgs = len(ref_imgs)//2
+        else:
+            nr_val_input_imgs = len(ref_imgs)
+        for k in range(nr_val_input_imgs):
+            ref = ref_imgs[k]
+            pose = pose_matrices[:,k]
+            inv_pose= pose[:,:,:-1].inverse()
+            ref_compensated = inverse_rotate(ref, inv_pose, intrinsics)
+            refs_compensated.append(ref_compensated)
+        
+        tgt_disparities=[]
+        ref_disparities=[]
+        for ref in refs_compensated:  ##put only the left to the average target image depth
+            depth_input = torch.cat((ref,tgt_img),1)
+            depth_output =disp_net(depth_input)
+            tgt_disparities.append(depth_output[1])
+            ref_disparities.append(depth_output[0])
 
-        depth_input = torch.cat((*ref_imgs[0:half],tgt_img,*ref_imgs[half:args.sequence_length]),1)
-        #print(depth_input.shape)
-        #pose_shape = [depth_input.shape[0],6]
-        explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
-        disp = disp_net(depth_input,pose.view(-1,(args.sequence_length-1)*6))
-        depth = 1/disp
+        disp = torch.mean(torch.stack(tgt_disparities),dim=0)
+        disp_uncertainty = torch.var(torch.stack(tgt_disparities),dim=0)       
 
+        tgt_depth = 1/disp 
 
-        loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs,
-                                                               intrinsics, depth,
-                                                               explainability_mask, pose,
-                                                               args.rotation_mode, args.padding_mode)
+        ref_depths=[]
+        for o in range(len(ref_disparities)):
+            ref_depths.append([1/ref_disparities[o]])
+        
+        loss_1, loss_4, warped, automasks = compute_photo_and_geometry_loss(tgt_img, ref_imgs, intrinsics, [tgt_depth], ref_depths,
+                                                         poses, 1, args.with_ssim,
+                                                         False, False, args.padding_mode)
         loss_1 = loss_1.item()
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask).item()
         else:
             loss_2 = 0
-        loss_3 = smooth_loss(depth).item()
+        loss_3 = compute_smooth_loss([tgt_depth],tgt_img,args.use_edge_smooth).item()
 
         if log_outputs and i in batches_to_log:  # log first output of wanted batches
             index = batches_to_log.index(i)
@@ -399,19 +526,19 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
                 for j, ref in enumerate(ref_imgs):
                     tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(tgt_img[0]), 0)
                     tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(ref[0]), 1)
-
-            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0], diff[0], explainability_mask)
+            
+            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0],  explainability_mask, tgt_disparities, disp_uncertainty)
 
         if log_outputs and i < len(val_loader)-1:
             step = args.batch_size*(args.sequence_length-1)
-            poses[i * step:(i+1) * step] = pose.cpu().view(-1, 6).numpy()
+            #log_poses[i * step:(i+1) * step] = poses.cpu().view(-1, 6).numpy()
             step = args.batch_size * 3
             disp_unraveled = disp.cpu().view(args.batch_size, -1)
             disp_values[i * step:(i+1) * step] = torch.cat([disp_unraveled.min(-1)[0],
                                                             disp_unraveled.median(-1)[0],
                                                             disp_unraveled.max(-1)[0]]).numpy()
-
-        loss = w1*loss_1 + w2*loss_2 + w3*loss_3
+        
+        loss = w1*loss_1 + w2*loss_2 + w3*loss_3 + w4*loss_4
         losses.update([loss, loss_1, loss_2])
 
         # measure elapsed time
@@ -462,7 +589,17 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         b = tgt_img.shape[0]
 
         # compute output
-        output_disp = disp_net(tgt_img)
+        disparities=[]
+        # compute output
+        for ref in ref_imgs:
+        
+            depth_input = torch.cat((ref,tgt_img),1)
+            disparities.append(disp_net(depth_input))
+        
+
+        output_disp = torch.mean(torch.stack(disparities),dim=0)
+        #disp_uncertainty = torch.var(torch.stack(disparities),dim=0)
+
         output_depth = 1/output_disp
         explainability_mask, output_poses = pose_exp_net(tgt_img, ref_imgs)
 
@@ -485,14 +622,26 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         final_poses[..., -1:] += first_inv_transform[..., -1:]
         final_poses = final_poses.reshape(b, -1, 3, 4)
 
-        if log_outputs and i in batches_to_log:  # log first output of wanted batches
+        if log_outputs and i in batches_to_log:
             index = batches_to_log.index(i)
             if epoch == 0:
-                for j, ref in enumerate(ref_imgs):
-                    tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(tgt_img[0]), 0)
-                    tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(ref[0]), 1)
+                tb_writer.add_image('val Input/{}'.format(index), tensor2array(tgt_img[0]), 0)
+                depth_to_show = torch.clone(gt_depth[0])
+                tb_writer.add_image('val target Depth Normalized/{}'.format(index),
+                                    tensor2array(depth_to_show, max_value=None),
+                                    epoch)
+                depth_to_show[depth_to_show == 0] = 1000
+                disp_to_show = (1/depth_to_show).clamp(0, 10)
+                tb_writer.add_image('val target Disparity Normalized/{}'.format(index),
+                                    tensor2array(disp_to_show, max_value=None, colormap='magma'),
+                                    epoch)
 
-            log_output_tensorboard(tb_writer, 'val', index, '', epoch, output_depth, output_disp, None, None, explainability_mask)
+            tb_writer.add_image('val Dispnet Output Normalized/{}'.format(index),
+                                tensor2array(output_disp[0], max_value=None, colormap='magma'),
+                                epoch)
+            tb_writer.add_image('val Depth Output Normalized/{}'.format(index),
+                                tensor2array(output_depth[0], max_value=None),
+                                epoch)
 
         if log_outputs and i < len(val_loader)-1:
             step = args.batch_size*(args.sequence_length-1)
@@ -509,14 +658,7 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        #logger.valid_bar.update(i+1)
-        #if i % args.print_freq == 0:
-        #    logger.valid_writer.write(
-        #        'valid: Time {} Abs Error {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(batch_time,
-         #                                                                              depth_errors.val[0],
-         #                                                                              depth_errors.avg[0],
-         #                                                                              pose_errors.val[0],
-         #                                                                              pose_errors.avg[0]))
+                                                                   
     if log_outputs:
         prefix = 'valid poses'
         coeffs_names = ['tx', 'ty', 'tz']
@@ -530,36 +672,99 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
     #logger.valid_bar.update(len(val_loader))
     return depth_errors.avg + pose_errors.avg, depth_error_names + pose_error_names
 
+@torch.no_grad()
+def validate_vslam(args, disp_net, epoch, tb_writer):
+
+    test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
+
+    #print('{} files to test'.format(len(test_files)))
+    
+    #os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
+    #os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
+
+    previous_img = test_files[0]
+    previous_img = imread(previous_img)
+
+    h,w,_ = previous_img.shape
+    if (h != args.height or w != args.width):
+        previous_img = resize(previous_img, (args.height, args.width))
+    previous_img = np.transpose(previous_img, (2, 0, 1))
+
+    previous_img = torch.from_numpy(previous_img.astype(np.float32)).unsqueeze(0)
+    previous_img = ((previous_img - 0.5)/0.5).to(device)
+
+    for i in range(1,len(test_files)):
+        current_img = test_files[i] 
+        current_img = imread(current_img)
+
+        h,w,_ = current_img.shape
+        if (h != args.height or w != args.width):
+            current_img = resize(current_img, (args.height, args.width))
+        current_img = np.transpose(current_img, (2, 0, 1))
+
+        current_img = torch.from_numpy(current_img.astype(np.float32)).unsqueeze(0)
+        current_img = ((current_img - 0.5)/0.5).to(device)
+
+        output = disp_net(torch.cat((previous_img,current_img),1))[0]
+
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(output, max_value=None, colormap='magma'),
+                                epoch)
+        depth = 1/output
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(depth, max_value=None),
+                                epoch)
+        
+        previous_img=current_img
+
 
 @torch.no_grad()
-def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sample_nb_to_log=10):
+def validate_with_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer, sample_nb_to_log=10):
     global device
     batch_time = AverageMeter()
     error_names = ['abs_diff', 'abs_rel', 'sq_rel', 'a1', 'a2', 'a3']
     errors = AverageMeter(i=len(error_names))
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
-    batches_to_log = list(np.linspace(0, len(val_loader)-1, sample_nb_to_log).astype(int))
+    batches_to_log = list(np.linspace(0, len(val_loader)-1, len(val_loader)).astype(int))
 
     # switch to evaluate mode
     disp_net.eval()
 
     end = time.time()
     #logger.valid_bar.update(0)
-    for i, (tgt_img, depth) in enumerate(val_loader):
+    for i, (tgt_img, ref_imgs, depth, intrinsics) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         depth = depth.to(device)
+        intrinsics = intrinsics.to(device)
+        ref_imgs = [img.to(device) for img in ref_imgs]
 
-        # compute output
-        half = args.sequence_length//2
-        ref=[]
-        for i in range(half):
-            ref.append(torch.from_numpy(np.zeros(tgt_img.shape).astype(np.float32)).to(device))
+        explainability_mask, poses = pose_exp_net(tgt_img, ref_imgs)
+        pose_matrices = pose_vec2mat_new(poses, args.rotation_mode) 
+        
+        refs_compensated =[]
+        if args.val_left_imgs:
+            nr_val_input_imgs = len(ref_imgs)//2
+        else:
+            nr_val_input_imgs = len(ref_imgs)
+        for k in range(nr_val_input_imgs):
+            ref = ref_imgs[k]
+            pose = pose_matrices[:,k]
+            inv_pose= pose[:,:,:-1].inverse()
+            ref_compensated = inverse_rotate(ref, inv_pose, intrinsics)
+            refs_compensated.append(ref_compensated)
+        
+        tgt_disparities=[]
+        #ref_disparities=[]
+        for ref in refs_compensated:  ##put only the left to the average target image depth
+            depth_input = torch.cat((ref,tgt_img),1)
+            depth_output =disp_net(depth_input)
+            tgt_disparities.append(depth_output[1])
+            #ref_disparities.append(depth_output[0])
 
-        depth_input = torch.cat((*ref,tgt_img,*ref),1)
-        pose_shape = [depth_input.shape[0],(args.sequence_length-1)*6]
-        output_disp = disp_net(depth_input, torch.from_numpy(np.zeros(pose_shape).astype(np.float32)).to(device))
-        output_depth = 1/output_disp[:, 0]
+        disp = torch.mean(torch.stack(tgt_disparities),dim=0)        
+        tgt_depth = 1/disp[:, 0] 
+
 
         if log_outputs and i in batches_to_log:
             index = batches_to_log.index(i)
@@ -576,22 +781,66 @@ def validate_with_gt(args, val_loader, disp_net, epoch, logger, tb_writer, sampl
                                     epoch)
 
             tb_writer.add_image('val Dispnet Output Normalized/{}'.format(index),
-                                tensor2array(output_disp[0], max_value=None, colormap='magma'),
+                                tensor2array(disp[0], max_value=None, colormap='magma'),
                                 epoch)
             tb_writer.add_image('val Depth Output Normalized/{}'.format(index),
-                                tensor2array(output_depth[0], max_value=None),
+                                tensor2array(tgt_depth[0], max_value=None),
                                 epoch)
-        errors.update(compute_depth_errors(depth, output_depth))
+        errors.update(compute_depth_errors(depth, tgt_depth))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        #.valid_bar.update(i+1)
+        #logger.valid_bar.update(i+1)
         #if i % args.print_freq == 0:
-        #    logger.valid_writer.write('valid: Time {} Abs Error {:.4f} ({:.4f})'.format(batch_time, errors.val[0], errors.avg[0]))
+            #logger.valid_writer.write('valid: Time {} Abs Error {:.4f} ({:.4f})'.format(batch_time, errors.val[0], errors.avg[0]))
     #logger.valid_bar.update(len(val_loader))
     return errors.avg, error_names
 
+@torch.no_grad()
+def validate_vslam(args, disp_net, epoch, tb_writer):
+
+    test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
+
+    #print('{} files to test'.format(len(test_files)))
+    
+    #os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
+    #os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
+
+    previous_img = test_files[0]
+    previous_img = imread(previous_img)
+
+    h,w,_ = previous_img.shape
+    if (h != args.height or w != args.width):
+        previous_img = resize(previous_img, (args.height, args.width))
+    previous_img = np.transpose(previous_img, (2, 0, 1))
+
+    previous_img = torch.from_numpy(previous_img.astype(np.float32)).unsqueeze(0)
+    previous_img = ((previous_img - 0.5)/0.5).to(device)
+
+    for i in range(1,len(test_files)):
+        current_img = test_files[i] 
+        current_img = imread(current_img)
+
+        h,w,_ = current_img.shape
+        if (h != args.height or w != args.width):
+            current_img = resize(current_img, (args.height, args.width))
+        current_img = np.transpose(current_img, (2, 0, 1))
+
+        current_img = torch.from_numpy(current_img.astype(np.float32)).unsqueeze(0)
+        current_img = ((current_img - 0.5)/0.5).to(device)
+
+        output = disp_net(torch.cat((previous_img,current_img),1))[0]
+
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(output, max_value=None, colormap='magma'),
+                                epoch)
+        depth = 1/output
+        tb_writer.add_image('vslam/{}'.format(i),
+                                tensor2array(depth, max_value=None),
+                                epoch)
+        
+        previous_img=current_img
 
 if __name__ == '__main__':
     main()

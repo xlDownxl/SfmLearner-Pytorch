@@ -3,11 +3,20 @@ import numpy as np
 from imageio import imread
 from path import Path
 import random
+import cv2
+def load_as_float(path, height, width):
+    if height==None or width ==None:
+        img=cv2.imread(path)  
+    else:
+        img=cv2.resize(cv2.imread(path), (width,height), interpolation = cv2.INTER_AREA)  
+    return img.astype(np.float32)
 
+def resize_intrinsics(intrinsics, target_height, target_width, img_height, img_width):
+    downscale_height = target_height/img_height
+    downscale_width = target_width/img_width
 
-def load_as_float(path):
-    return imread(path).astype(np.float32)
-
+    intrinsics_scaled = np.concatenate((intrinsics[0]*downscale_width,intrinsics[1]*downscale_height, intrinsics[2]), axis=0).reshape(3,3)
+    return intrinsics_scaled
 
 class SequenceFolder(data.Dataset):
     """A sequence data loader where the files are arranged in this way:
@@ -21,9 +30,11 @@ class SequenceFolder(data.Dataset):
         transform functions must take in a list a images and a numpy array (usually intrinsics matrix)
     """
 
-    def __init__(self, root, seed=None, train=True, sequence_length=3, transform=None, target_transform=None):
+    def __init__(self, root, height=None, width=None, seed=None, train=True, sequence_length=3, transform=None, target_transform=None):
         np.random.seed(seed)
         random.seed(seed)
+        self.height= height
+        self.width = width
         self.root = Path(root)
         scene_list_path = self.root/'train.txt' if train else self.root/'val.txt'
         self.scenes = [self.root/folder[:-1] for folder in open(scene_list_path)]
@@ -37,7 +48,14 @@ class SequenceFolder(data.Dataset):
         shifts.pop(demi_length)
         for scene in self.scenes:
             intrinsics = np.genfromtxt(scene/'cam.txt').astype(np.float32).reshape((3, 3))
-            imgs = sorted(scene.files('*.jpg'))
+            imgs = sorted(scene.files('*.jpg'), key = lambda x : int(str(x).split(".")[0].split("/")[-1]))
+            if len(imgs)==0:
+                imgs = sorted(scene.files('*.png'), key = lambda x : int(str(x).split(".")[0].split("/")[-1]))
+            dummy_img =cv2.imread(imgs[0])
+
+
+            if self.width !=None and self.height!=None:
+                intrinsics = resize_intrinsics(intrinsics,self.height,self.width,*dummy_img.shape[0:2])
             if len(imgs) < sequence_length:
                 continue
             for i in range(demi_length, len(imgs)-demi_length):
@@ -50,8 +68,8 @@ class SequenceFolder(data.Dataset):
 
     def __getitem__(self, index):
         sample = self.samples[index]
-        tgt_img = load_as_float(sample['tgt'])
-        ref_imgs = [load_as_float(ref_img) for ref_img in sample['ref_imgs']]
+        tgt_img = load_as_float(sample['tgt'],self.height,self.width)
+        ref_imgs = [load_as_float(ref_img,self.height,self.width) for ref_img in sample['ref_imgs']]
         if self.transform is not None:
             imgs, intrinsics = self.transform([tgt_img] + ref_imgs, np.copy(sample['intrinsics']))
             tgt_img = imgs[0]
