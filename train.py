@@ -95,15 +95,18 @@ parser.add_argument('--height', type=int,
 parser.add_argument('--width', type=int,
                     help='number of images feed into depthnet',
                     metavar='N',)
-
 parser.add_argument('--minimum-reprojection-error', type=int,
                     help='put 1 if minimum reprojetion error should be used',
                     metavar='N',default=0)
+parser.add_argument('--use-add-aug', type=int,
+                    help='if set to 1 uses random gauß, vertical flip and colorjitter',
+                    metavar='N',default=0)
+parser.add_argument('--disp-resnet-layers', type=int, help='resnet layer, set to 18 or 50', metavar='N',default=18)
+parser.add_argument('--pretrained-dispnet', type=int, help='set to 1 to use imagenet pretrained dispnet', metavar='N',default=0)
 
 best_error = -1
 n_iter = 0
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
 
 def main():
     def make_param_file(args,save_path):    
@@ -121,12 +124,16 @@ def main():
         keys_with_prefix['photo_loss_weight'] = 'photo_loss_weight '
         keys_with_prefix['mask_loss_weight'] = 'mask_loss_weight '
         keys_with_prefix['smooth_loss_weight'] = 'smooth_loss_weight '
+        keys_with_prefix['geometry_consistency_weight'] = 'geometry-consistency-weight '
         keys_with_prefix['use_edge_smooth'] = 'use_edge_smooth '
         keys_with_prefix['width'] = 'width '
         keys_with_prefix['height'] = 'height '
         keys_with_prefix['with_gt'] = 'with_gt '
         keys_with_prefix['with_ssim'] = 'with_ssim '
-        keys_with_prefix['geometry_consistency_weight'] = 'geometry-consistency-weight '
+        keys_with_prefix['minimum_reprojection_error'] = 'minimum reprojection error '
+        keys_with_prefix['use_add_aug'] = 'use additional augmentation '
+        keys_with_prefix['disp_resnet_layers'] = 'number of dispnet layers '   
+        keys_with_prefix['pretrained_dispnet'] = 'using pretrained dispnet '         
         
         for key, prefix in keys_with_prefix.items():
             value = args_dict[key]
@@ -166,12 +173,24 @@ def main():
     # Data loading code
     normalize = custom_transforms.Normalize(mean=[0.5, 0.5, 0.5],
                                             std=[0.5, 0.5, 0.5])
-    train_transform = custom_transforms.Compose([
-        custom_transforms.RandomHorizontalFlip(),
-        custom_transforms.RandomScaleCrop(),
-        custom_transforms.ArrayToTensor(),
-        normalize
-    ])
+
+    if args.use_add_aug:                                        
+        train_transform = custom_transforms.Compose([
+            custom_transforms.RandomGauss(),
+            custom_transforms.ColorJitter(),
+            custom_transforms.RandomVerticalFlip(),
+            custom_transforms.RandomHorizontalFlip(),
+            custom_transforms.RandomScaleCrop(),
+            custom_transforms.ArrayToTensor(),
+            normalize
+        ])
+    else:
+        train_transform = custom_transforms.Compose([
+            custom_transforms.RandomHorizontalFlip(),
+            custom_transforms.RandomScaleCrop(),
+            custom_transforms.ArrayToTensor(),
+            normalize
+        ])
 
     valid_transform = custom_transforms.Compose([custom_transforms.ArrayToTensor(), normalize])
 
@@ -227,10 +246,8 @@ def main():
     if args.epoch_size == 0:
         args.epoch_size = len(train_loader)
 
-    # create model
-    print("=> creating model")
-
-    disp_net = models.DispResNet(num_layers = 18).to(device)
+    print("=> creating model with {} layers and pretrained {}".format(args.disp_resnet_layers,args.pretrained_dispnet))
+    disp_net = models.DispResNet(num_layers = args.disp_resnet_layers, pretrained=args.pretrained_dispnet).to(device)
     output_exp = args.mask_loss_weight > 0
     if not output_exp:
         print("=> no mask loss, PoseExpnet will only output pose")
@@ -277,7 +294,6 @@ def main():
         writer.writerow(['train_loss', 'photo_loss', 'explainability_loss', 'smooth_loss'])
 
     logger = None#TermLogger(n_epochs=args.epochs, train_size=min(len(train_loader), args.epoch_size), valid_size=len(val_loader))
-    #logger.epoch_bar.start()
 
     if args.pretrained_disp or args.evaluate:
         #logger.reset_valid_bar()
@@ -294,15 +310,10 @@ def main():
 
     for epoch in range(args.epochs):
         print(epoch)
-        #logger.epoch_bar.update(epoch)
+        start = time.time()
 
-        # train for one epoch
-        #logger.reset_train_bar()
         train_loss = train(args, train_loader, disp_net, pose_exp_net, optimizer, args.epoch_size, logger, tb_writer)
-        #logger.train_writer.write(' * Avg Loss : {:.3f}'.format(train_loss))
 
-        # evaluate on validation set
-        #logger.reset_valid_bar()
         if args.with_gt and args.with_pose:
             errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer)
         elif args.with_gt:
@@ -339,13 +350,12 @@ def main():
         with open(args.save_path/args.log_summary, 'a') as csvfile:
             writer = csv.writer(csvfile, delimiter='\t')
             writer.writerow([train_loss, decisive_error])
-    #logger.epoch_bar.finish()
+        end = time.time()
+        print("epoch took {} seconds".format(end-start))
 
 
 def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, logger, tb_writer):
     global n_iter, device
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
     losses = AverageMeter(precision=4)
     w1, w2, w3, w4 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight, args.geometry_consistency_weight
 
@@ -353,15 +363,10 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
     disp_net.train()
     pose_exp_net.train()
 
-    end = time.time()
-    #logger.train_bar.update(0)
-
     for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv) in enumerate(train_loader):
         log_losses = i > 0 and n_iter % args.print_freq == 0
         log_output = args.training_output_freq > 0 and n_iter % args.training_output_freq == 0
-
-        # measure data loading time
-        data_time.update(time.time() - end)
+        
         tgt_img = tgt_img.to(device)
         ref_imgs = [img.to(device) for img in ref_imgs]
         intrinsics = intrinsics.to(device)
@@ -404,10 +409,6 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
                                                          poses, 4, args.with_ssim,
                                                          False, False, args.padding_mode)
         
-        
-        #compute_photo_and_geometry_loss(tgt_img, ref_imgs, intrinsics,
-             #                                                  tgt_depth, ref_depths, explainability_mask, poses,
-              #                                                 args.rotation_mode, args.padding_mode, args.with_ssim)
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask)
         else:
@@ -436,28 +437,20 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, log
         loss.backward()
         optimizer.step()
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
         with open(args.save_path/args.log_full, 'a') as csvfile:
             writer = csv.writer(csvfile, delimiter='\t')
             writer.writerow([loss.item(), loss_1.item(), loss_2.item() if w2 > 0 else 0, loss_3.item()])
-        #logger.train_bar.update(i+1)
-        #if i % args.print_freq == 0:
-            #logger.train_writer.write('Train: Time {} Data {} Loss {}'.format(batch_time, data_time, losses))
+
         if i >= epoch_size - 1:
             break
-
         n_iter += 1
 
     return losses.avg[0]
 
-
 @torch.no_grad()
 def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer, sample_nb_to_log=10):
     global device
-    batch_time = AverageMeter()
+
     losses = AverageMeter(i=3, precision=4)
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
@@ -470,8 +463,6 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
     disp_net.eval()
     pose_exp_net.eval()
 
-    end = time.time()
-    #logger.valid_bar.update(0)
     for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
         ref_imgs = [img.to(device) for img in ref_imgs]
@@ -541,12 +532,6 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
         loss = w1*loss_1 + w2*loss_2 + w3*loss_3 + w4*loss_4
         losses.update([loss, loss_1, loss_2])
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-        #logger.valid_bar.update(i+1)
-        #if i % args.print_freq == 0:
-        #    logger.valid_writer.write('valid: Time {} Loss {}'.format(batch_time, losses))
     if log_outputs:
         prefix = 'valid poses'
         coeffs_names = ['tx', 'ty', 'tz']
@@ -564,7 +549,6 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger,
 @torch.no_grad()
 def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer, sample_nb_to_log=3):
     global device
-    batch_time = AverageMeter()
     depth_error_names = ['abs_diff', 'abs_rel', 'sq_rel', 'a1', 'a2', 'a3']
     depth_errors = AverageMeter(i=len(depth_error_names), precision=4)
     pose_error_names = ['ATE', 'RTE']
@@ -579,7 +563,6 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
     disp_net.eval()
     pose_exp_net.eval()
 
-    end = time.time()
     #logger.valid_bar.update(0)
     for i, (tgt_img, ref_imgs, gt_depth, gt_poses) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
@@ -590,12 +573,9 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
 
         # compute output
         disparities=[]
-        # compute output
         for ref in ref_imgs:
-        
             depth_input = torch.cat((ref,tgt_img),1)
-            disparities.append(disp_net(depth_input))
-        
+            disparities.append(disp_net(depth_input))     
 
         output_disp = torch.mean(torch.stack(disparities),dim=0)
         #disp_uncertainty = torch.var(torch.stack(disparities),dim=0)
@@ -654,10 +634,6 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
 
         depth_errors.update(compute_depth_errors(gt_depth, output_depth[:, 0]))
         pose_errors.update(compute_pose_errors(gt_poses, final_poses))
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
                                                                    
     if log_outputs:
         prefix = 'valid poses'
@@ -678,7 +654,6 @@ def validate_vslam(args, disp_net, epoch, tb_writer):
     test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
 
     #print('{} files to test'.format(len(test_files)))
-    
     #os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
     #os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
 
@@ -717,21 +692,16 @@ def validate_vslam(args, disp_net, epoch, tb_writer):
         
         previous_img=current_img
 
-
 @torch.no_grad()
 def validate_with_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer, sample_nb_to_log=10):
     global device
-    batch_time = AverageMeter()
     error_names = ['abs_diff', 'abs_rel', 'sq_rel', 'a1', 'a2', 'a3']
     errors = AverageMeter(i=len(error_names))
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
     batches_to_log = list(np.linspace(0, len(val_loader)-1, len(val_loader)).astype(int))
-
-    # switch to evaluate mode
     disp_net.eval()
 
-    end = time.time()
     #logger.valid_bar.update(0)
     for i, (tgt_img, ref_imgs, depth, intrinsics) in enumerate(val_loader):
         tgt_img = tgt_img.to(device)
@@ -765,7 +735,6 @@ def validate_with_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb
         disp = torch.mean(torch.stack(tgt_disparities),dim=0)        
         tgt_depth = 1/disp[:, 0] 
 
-
         if log_outputs and i in batches_to_log:
             index = batches_to_log.index(i)
             if epoch == 0:
@@ -788,13 +757,6 @@ def validate_with_gt(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb
                                 epoch)
         errors.update(compute_depth_errors(depth, tgt_depth))
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-        #logger.valid_bar.update(i+1)
-        #if i % args.print_freq == 0:
-            #logger.valid_writer.write('valid: Time {} Abs Error {:.4f} ({:.4f})'.format(batch_time, errors.val[0], errors.avg[0]))
-    #logger.valid_bar.update(len(val_loader))
     return errors.avg, error_names
 
 @torch.no_grad()
@@ -803,7 +765,6 @@ def validate_vslam(args, disp_net, epoch, tb_writer):
     test_files = glob.glob(args.data+"/vslam_0/v_slam/*.jpg") #os.listdir(args.data+"/vslam_0/v_slam/")
 
     #print('{} files to test'.format(len(test_files)))
-    
     #os.makedirs(args.save_path/str('vslam/depth/'+str(epoch)))
     #os.makedirs(args.save_path/str('vslam/disp/'+str(epoch)))
 
@@ -838,8 +799,7 @@ def validate_vslam(args, disp_net, epoch, tb_writer):
         depth = 1/output
         tb_writer.add_image('vslam/{}'.format(i),
                                 tensor2array(depth, max_value=None),
-                                epoch)
-        
+                                epoch)    
         previous_img=current_img
 
 if __name__ == '__main__':
